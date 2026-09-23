@@ -18,5 +18,16 @@ export type Lead = {
   next_action_title: string | null;
   last_contact_at: string | null;
   stage_id: string;
+  notes: string | null;
+  metadata: Record<string, unknown> | null;
+  updated_at: string;
   pipeline_stages: Pick<Stage, "name" | "color"> | null;
+};
+
+export type LeadActivity = {
+  id: string;
+  activity_type: "note" | "call" | "whatsapp" | "email" | "meeting" | "status_change" | "other";
+  title: string;
+  description: string | null;
+  occurred_at: string;
 };
