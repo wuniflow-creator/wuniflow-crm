@@ -2,9 +2,10 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import type { Lead, Stage } from "@/lib/types";
+import type { Lead, LeadActivity, Stage } from "@/lib/types";
 
 type SessionState = "loading" | "signed_out" | "ready" | "no_access";
+type View = "overview" | "leads";
 
 const formatDate = (value: string | null) =>
   value ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "—";
@@ -14,8 +15,24 @@ const toWhatsApp = (value: string | null) => {
   return number ? `https://wa.me/${number.startsWith("55") ? number : `55${number}`}` : "#";
 };
 
+const metadataValue = (lead: Lead, key: string) => {
+  const value = lead.metadata?.[key];
+  return typeof value === "string" && value.trim() ? value : null;
+};
+
+const activityLabel: Record<LeadActivity["activity_type"], string> = {
+  note: "Nota",
+  call: "Ligação",
+  whatsapp: "WhatsApp",
+  email: "E-mail",
+  meeting: "Reunião",
+  status_change: "Status",
+  other: "Atualização",
+};
+
 export default function Home() {
   const [state, setState] = useState<SessionState>("loading");
+  const [view, setView] = useState<View>("overview");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
@@ -23,6 +40,10 @@ export default function Home() {
   const [role, setRole] = useState("");
   const [stages, setStages] = useState<Stage[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [search, setSearch] = useState("");
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [activities, setActivities] = useState<LeadActivity[]>([]);
+  const [isLoadingActivities, setIsLoadingActivities] = useState(false);
   const [isNewLeadOpen, setIsNewLeadOpen] = useState(false);
   const [newLead, setNewLead] = useState({ name: "", company: "", whatsapp: "", stageId: "", nextAction: "" });
 
@@ -52,7 +73,7 @@ export default function Home() {
 
     const [{ data: stageData }, { data: leadData }] = await Promise.all([
       supabase.from("pipeline_stages").select("id,name,position,color,stage_type").eq("organization_id", membership.organization_id).eq("is_active", true).order("position"),
-      supabase.from("leads").select("id,name,company_name,whatsapp,source,priority,status,next_action_at,next_action_title,last_contact_at,stage_id,pipeline_stages(name,color)").eq("organization_id", membership.organization_id).neq("status", "archived").order("updated_at", { ascending: false }).limit(100),
+      supabase.from("leads").select("id,name,company_name,whatsapp,source,priority,status,next_action_at,next_action_title,last_contact_at,stage_id,notes,metadata,updated_at,pipeline_stages(name,color)").eq("organization_id", membership.organization_id).neq("status", "archived").order("updated_at", { ascending: false }).limit(100),
     ]);
 
     const safeStages = (stageData || []) as Stage[];
@@ -76,6 +97,12 @@ export default function Home() {
     urgent: leads.filter((lead) => lead.priority === "urgent" || lead.priority === "high").length,
     won: leads.filter((lead) => lead.status === "won").length,
   }), [leads]);
+
+  const filteredLeads = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return leads;
+    return leads.filter((lead) => [lead.name, lead.company_name, lead.whatsapp, lead.pipeline_stages?.name].filter(Boolean).join(" ").toLowerCase().includes(term));
+  }, [leads, search]);
 
   const signIn = async (event: FormEvent) => {
     event.preventDefault();
@@ -112,9 +139,20 @@ export default function Home() {
     await loadCrm();
   };
 
+  const openLead = async (lead: Lead) => {
+    setSelectedLead(lead);
+    setActivities([]);
+    setIsLoadingActivities(true);
+    if (!supabase) return;
+    const { data } = await supabase.from("lead_activities").select("id,activity_type,title,description,occurred_at").eq("lead_id", lead.id).order("occurred_at", { ascending: false }).limit(30);
+    setActivities((data || []) as LeadActivity[]);
+    setIsLoadingActivities(false);
+  };
+
   const signOut = async () => {
     await supabase?.auth.signOut();
     setLeads([]);
+    setSelectedLead(null);
     setState("signed_out");
   };
 
@@ -132,5 +170,7 @@ export default function Home() {
     return <main className="centered"><section className="setup-card"><span className="mark">W</span><h1>Acesso ainda não liberado</h1><p>Este usuário ainda não faz parte da organização Wuniflow no CRM.</p><button onClick={signOut}>Sair</button></section></main>;
   }
 
-  return <main className="shell"><aside><div className="brand"><span className="mark">W</span><div><strong>WUNIFLOW</strong><small>AUTOMATIONS</small></div></div><nav><a className="active">Visão geral</a><a>Leads</a><a>Atividades</a><a>Tarefas</a></nav><div className="side-footer"><span>{role}</span><button className="text-button" onClick={signOut}>Sair</button></div></aside><section className="content"><header><div><p className="eyebrow">OPERAÇÃO COMERCIAL</p><h1>Visão geral</h1><p className="muted">Acompanhe leads, prioridades e próximos passos.</p></div><button onClick={() => setIsNewLeadOpen(true)}>+ Novo lead</button></header><section className="stats"><article><span>Leads abertos</span><strong>{stats.open}</strong></article><article><span>Próximas ações</span><strong>{stats.next}</strong></article><article><span>Prioridade alta</span><strong>{stats.urgent}</strong></article><article><span>Ganhos</span><strong>{stats.won}</strong></article></section><section className="panel"><div className="panel-title"><div><h2>Leads recentes</h2><p>Os diagnósticos e atendimentos aparecerão aqui.</p></div><span>{leads.length} registros</span></div>{leads.length === 0 ? <div className="empty"><h3>Ainda não há leads no CRM</h3><p>Os próximos diagnósticos enviados pela landing serão integrados ao n8n e aparecerão aqui.</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Próxima ação</th><th></th></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id}><td><strong>{lead.name}</strong><small>{lead.company_name || "Empresa não informada"} · {lead.source || "Origem não informada"}</small></td><td><span className="stage"><i style={{ background: lead.pipeline_stages?.color || "#94a3b8" }} />{lead.pipeline_stages?.name || "Sem etapa"}</span></td><td><span className={`priority ${lead.priority}`}>{lead.priority}</span></td><td><strong>{lead.next_action_title || "Sem ação definida"}</strong><small>{formatDate(lead.next_action_at)}</small></td><td>{lead.whatsapp && <a className="whatsapp" href={toWhatsApp(lead.whatsapp)} target="_blank" rel="noreferrer">WhatsApp ↗</a>}</td></tr>)}</tbody></table></div>}</section></section>{isNewLeadOpen && <div className="modal-backdrop"><section className="modal"><div className="panel-title"><div><p className="eyebrow">CADASTRO MANUAL</p><h2>Novo lead</h2></div><button className="text-button" onClick={() => setIsNewLeadOpen(false)}>Fechar</button></div><form onSubmit={createLead} className="lead-form"><label>Nome<input value={newLead.name} onChange={(event) => setNewLead({ ...newLead, name: event.target.value })} required /></label><label>Empresa<input value={newLead.company} onChange={(event) => setNewLead({ ...newLead, company: event.target.value })} /></label><label>WhatsApp<input inputMode="tel" value={newLead.whatsapp} onChange={(event) => setNewLead({ ...newLead, whatsapp: event.target.value })} placeholder="(61) 99999-9999" /></label><label>Etapa<select value={newLead.stageId} onChange={(event) => setNewLead({ ...newLead, stageId: event.target.value })} required>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select></label><label className="full">Próxima ação<input value={newLead.nextAction} onChange={(event) => setNewLead({ ...newLead, nextAction: event.target.value })} placeholder="Ex.: Revisar diagnóstico e entrar em contato" /></label><div className="form-actions"><button className="secondary" type="button" onClick={() => setIsNewLeadOpen(false)}>Cancelar</button><button type="submit">Salvar lead</button></div></form></section></div>}</main>;
+  const leadRows = filteredLeads.map((lead) => <tr key={lead.id}><td><strong>{lead.name}</strong><small>{lead.company_name || "Empresa não informada"} · {lead.source || "Origem não informada"}</small></td><td><span className="stage"><i style={{ background: lead.pipeline_stages?.color || "#94a3b8" }} />{lead.pipeline_stages?.name || "Sem etapa"}</span></td><td><span className={`priority ${lead.priority}`}>{lead.priority}</span></td><td><strong>{lead.next_action_title || "Revisar contexto e assumir contato"}</strong><small>{formatDate(lead.next_action_at || lead.last_contact_at)}</small></td><td className="actions"><button className="view-button" onClick={() => void openLead(lead)}>Ver contexto</button>{lead.whatsapp && <a className="whatsapp" href={toWhatsApp(lead.whatsapp)} target="_blank" rel="noreferrer">WhatsApp ↗</a>}</td></tr>);
+
+  return <main className="shell"><aside><div className="brand"><span className="mark">W</span><div><strong>WUNIFLOW</strong><small>AUTOMATIONS</small></div></div><nav><button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}>Visão geral</button><button className={view === "leads" ? "active" : ""} onClick={() => setView("leads")}>Leads</button><span className="nav-disabled">Atividades</span><span className="nav-disabled">Tarefas</span></nav><div className="side-footer"><span>{role}</span><button className="text-button" onClick={signOut}>Sair</button></div></aside><section className="content"><header><div><p className="eyebrow">OPERAÇÃO COMERCIAL</p><h1>{view === "overview" ? "Visão geral" : "Leads"}</h1><p className="muted">{view === "overview" ? "Acompanhe leads, prioridades e próximos passos." : "Diagnósticos e conversas qualificadas em um só lugar."}</p></div><button onClick={() => setIsNewLeadOpen(true)}>+ Novo lead</button></header>{view === "overview" ? <><section className="stats"><article><span>Leads abertos</span><strong>{stats.open}</strong></article><article><span>Próximas ações</span><strong>{stats.next}</strong></article><article><span>Prioridade alta</span><strong>{stats.urgent}</strong></article><article><span>Ganhos</span><strong>{stats.won}</strong></article></section><section className="panel"><div className="panel-title"><div><h2>Leads recentes</h2><p>Diagnósticos recebidos e atendimentos em andamento.</p></div><span>{leads.length} registros</span></div>{leads.length === 0 ? <div className="empty"><h3>Ainda não há leads no CRM</h3><p>O próximo diagnóstico confirmado pela landing aparecerá aqui automaticamente.</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Próxima ação</th><th></th></tr></thead><tbody>{leadRows}</tbody></table></div>}</section></> : <section className="panel"><div className="panel-title lead-list-heading"><div><h2>Todos os leads</h2><p>Use a busca para localizar empresa, contato, etapa ou telefone.</p></div><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar lead…" /></div>{filteredLeads.length === 0 ? <div className="empty"><h3>Nenhum lead encontrado</h3><p>{leads.length ? "Tente outro termo de busca." : "Os novos diagnósticos serão listados aqui."}</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Última atualização</th><th></th></tr></thead><tbody>{leadRows}</tbody></table></div>}</section>}</section>{selectedLead && <div className="modal-backdrop" onMouseDown={() => setSelectedLead(null)}><section className="modal lead-detail" onMouseDown={(event) => event.stopPropagation()}><div className="panel-title"><div><p className="eyebrow">CONTEXTO DO LEAD</p><h2>{selectedLead.name}</h2><p>{selectedLead.company_name || "Empresa não informada"} · {selectedLead.pipeline_stages?.name || "Sem etapa"}</p></div><button className="text-button" onClick={() => setSelectedLead(null)}>Fechar</button></div><div className="detail-body"><div className="detail-actions">{selectedLead.whatsapp && <a className="button-link" href={toWhatsApp(selectedLead.whatsapp)} target="_blank" rel="noreferrer">Assumir no WhatsApp ↗</a>}<span className={`priority ${selectedLead.priority}`}>Prioridade {selectedLead.priority}</span></div><section className="context-grid"><div><span>WhatsApp</span><strong>{selectedLead.whatsapp || "Não informado"}</strong></div><div><span>Último contato</span><strong>{formatDate(selectedLead.last_contact_at)}</strong></div><div><span>Cargo</span><strong>{metadataValue(selectedLead, "role") || "Não informado"}</strong></div><div><span>Equipe</span><strong>{metadataValue(selectedLead, "team_size") || "Não informada"}</strong></div></section><section className="context-summary"><h3>Diagnóstico e qualificação</h3><dl><div><dt>Processo atual</dt><dd>{metadataValue(selectedLead, "current_process") || "Ainda não informado"}</dd></div><div><dt>Principal gargalo</dt><dd>{metadataValue(selectedLead, "main_pain") || "Ainda não informado"}</dd></div><div><dt>Necessidade</dt><dd>{metadataValue(selectedLead, "target_process") || "Ainda não informado"}</dd></div><div><dt>Urgência</dt><dd>{metadataValue(selectedLead, "urgency") || "Ainda não informada"}</dd></div></dl>{metadataValue(selectedLead, "summary") && <p className="summary">{metadataValue(selectedLead, "summary")}</p>}{selectedLead.notes && <p className="notes">{selectedLead.notes}</p>}</section><section className="timeline"><h3>Histórico comercial</h3>{isLoadingActivities ? <p className="muted">Carregando atividades…</p> : activities.length ? activities.map((activity) => <article key={activity.id}><span>{activityLabel[activity.activity_type]}</span><div><strong>{activity.title}</strong>{activity.description && <p>{activity.description}</p>}<small>{formatDate(activity.occurred_at)}</small></div></article>) : <p className="muted">Ainda não há atividades registradas para este lead.</p>}</section></div></section></div>}{isNewLeadOpen && <div className="modal-backdrop"><section className="modal"><div className="panel-title"><div><p className="eyebrow">CADASTRO MANUAL</p><h2>Novo lead</h2></div><button className="text-button" onClick={() => setIsNewLeadOpen(false)}>Fechar</button></div><form onSubmit={createLead} className="lead-form"><label>Nome<input value={newLead.name} onChange={(event) => setNewLead({ ...newLead, name: event.target.value })} required /></label><label>Empresa<input value={newLead.company} onChange={(event) => setNewLead({ ...newLead, company: event.target.value })} /></label><label>WhatsApp<input inputMode="tel" value={newLead.whatsapp} onChange={(event) => setNewLead({ ...newLead, whatsapp: event.target.value })} placeholder="(61) 99999-9999" /></label><label>Etapa<select value={newLead.stageId} onChange={(event) => setNewLead({ ...newLead, stageId: event.target.value })} required>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select></label><label className="full">Próxima ação<input value={newLead.nextAction} onChange={(event) => setNewLead({ ...newLead, nextAction: event.target.value })} placeholder="Ex.: Revisar diagnóstico e entrar em contato" /></label><div className="form-actions"><button className="secondary" type="button" onClick={() => setIsNewLeadOpen(false)}>Cancelar</button><button type="submit">Salvar lead</button></div></form></section></div>}</main>;
 }
