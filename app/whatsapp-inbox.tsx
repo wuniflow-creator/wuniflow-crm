@@ -1,16 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type LeadSummary = { name: string; company_name: string | null };
+type LeadSummary = {
+  id: string;
+  name: string;
+  company_name: string | null;
+  whatsapp: string | null;
+  phone: string | null;
+  pipeline_stages: { name: string; color: string | null } | null;
+};
 type Conversation = {
   id: string;
   contact_name: string | null;
   contact_phone: string;
   contact_avatar_url: string | null;
   lead_id: string | null;
-  leads: LeadSummary | null;
+  lead: LeadSummary | null;
   last_message_at: string | null;
   last_message_preview: string | null;
   unread_count: number;
@@ -34,6 +41,8 @@ type Message = {
 const fmtTime = (value: string | null) =>
   value ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)) : "";
 
+const normalizePhone = (value: string | null | undefined) => (value || "").replace(/\D/g, "");
+
 const fmtListTime = (value: string | null) => {
   if (!value) return "";
   const date = new Date(value);
@@ -44,6 +53,35 @@ const fmtListTime = (value: string | null) => {
   yesterday.setDate(now.getDate() - 1);
   if (date.toDateString() === yesterday.toDateString()) return "Ontem";
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(date);
+};
+
+const fmtMessageDay = (value: string) => {
+  const date = new Date(value);
+  const now = new Date();
+  const today = now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === today) return "HOJE";
+  if (date.toDateString() === yesterday.toDateString()) return "ONTEM";
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined })
+    .format(date)
+    .replace(".", "")
+    .toUpperCase();
+};
+
+const messageStatusTitle = (message: Message) => {
+  if (message.status === "failed") return "Falha no envio";
+  if (message.status === "read" || message.read_at) return "Lida";
+  if (message.status === "delivered" || message.delivered_at) return "Entregue";
+  return "Enviada";
+};
+
+const documentLabel = (mime: string | null) => {
+  if (mime === "application/pdf") return "PDF";
+  if (mime?.includes("word")) return "DOC";
+  if (mime?.includes("sheet") || mime?.includes("excel")) return "XLS";
+  if (mime === "text/plain") return "TXT";
+  return "DOC";
 };
 
 const commonEmojis = [
@@ -77,15 +115,18 @@ export default function WhatsAppInbox({
   organizationId,
   onOpenMenu,
   onOpenLead,
+  onCreateLead,
 }: {
   organizationId: string;
   onOpenMenu?: () => void;
   onOpenLead?: (leadId: string) => void;
+  onCreateLead?: (contact: { name: string; phone: string; conversationId: string }) => void;
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [search, setSearch] = useState("");
+  const [conversationFilter, setConversationFilter] = useState<"all" | "unread" | "leads">("all");
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -103,17 +144,49 @@ export default function WhatsAppInbox({
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const avatarTriedRef = useRef<Set<string>>(new Set());
+  const avatarSyncBlockedRef = useRef(false);
 
   const loadConversations = useCallback(async () => {
     if (!supabase) return;
-    const { data } = await supabase
-      .from("whatsapp_conversations")
-      .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,last_message_at,last_message_preview,unread_count,status,leads(name,company_name)")
-      .eq("organization_id", organizationId)
-      .neq("status", "archived")
-      .order("last_message_at", { ascending: false, nullsFirst: false });
 
-    setConversations((data || []) as unknown as Conversation[]);
+    const [{ data: conversationData, error: conversationError }, { data: leadData }] = await Promise.all([
+      supabase
+        .from("whatsapp_conversations")
+        .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,last_message_at,last_message_preview,unread_count,status")
+        .eq("organization_id", organizationId)
+        .neq("status", "archived")
+        .order("last_message_at", { ascending: false, nullsFirst: false }),
+      supabase
+        .from("leads")
+        .select("id,name,company_name,whatsapp,phone,pipeline_stages(name,color)")
+        .eq("organization_id", organizationId)
+        .neq("status", "archived")
+        .limit(1000),
+    ]);
+
+    if (conversationError) return;
+
+    const leads = (leadData || []) as unknown as LeadSummary[];
+    const leadById = new Map(leads.map((lead) => [lead.id, lead]));
+    const phoneMatches = new Map<string, LeadSummary | null>();
+
+    for (const lead of leads) {
+      const numbers = [...new Set([normalizePhone(lead.whatsapp), normalizePhone(lead.phone)].filter(Boolean))];
+      for (const number of numbers) {
+        if (phoneMatches.has(number)) phoneMatches.set(number, null);
+        else phoneMatches.set(number, lead);
+      }
+    }
+
+    const rows = ((conversationData || []) as Omit<Conversation, "lead">[]).map((conversation) => ({
+      ...conversation,
+      lead:
+        (conversation.lead_id ? leadById.get(conversation.lead_id) || null : null) ||
+        phoneMatches.get(normalizePhone(conversation.contact_phone)) ||
+        null,
+    }));
+
+    setConversations(rows);
   }, [organizationId]);
 
   const loadMessages = useCallback(async (id: string) => {
@@ -129,7 +202,7 @@ export default function WhatsAppInbox({
     const rows = (data || []) as Message[];
     setMessages(rows);
 
-    const paths = rows.filter((message) => message.media_url).map((message) => message.media_url!);
+    const paths = [...new Set(rows.filter((message) => message.media_url).map((message) => message.media_url!))];
     if (!paths.length) {
       setMediaUrls({});
       return;
@@ -144,23 +217,28 @@ export default function WhatsAppInbox({
   }, [organizationId]);
 
   const refreshAvatar = useCallback(async (conversation: Conversation) => {
-    if (!supabase || conversation.contact_avatar_url || avatarTriedRef.current.has(conversation.id)) return;
+    if (!supabase || avatarSyncBlockedRef.current || conversation.contact_avatar_url || avatarTriedRef.current.has(conversation.id)) return false;
     avatarTriedRef.current.add(conversation.id);
     const session = await supabase.auth.getSession();
     const token = session.data.session?.access_token;
-    if (!token) return;
+    if (!token) return false;
 
     const { data, error } = await supabase.functions.invoke("whatsapp-contact-profile", {
       body: { conversation_id: conversation.id },
       headers: { Authorization: "Bearer " + token },
     });
-    if (error || !data?.profile_picture_url) return;
+    if (error) {
+      avatarSyncBlockedRef.current = true;
+      return false;
+    }
+    if (!data?.profile_picture_url) return false;
 
     setConversations((current) =>
       current.map((item) =>
         item.id === conversation.id ? { ...item, contact_avatar_url: data.profile_picture_url as string } : item,
       ),
     );
+    return true;
   }, []);
 
   useEffect(() => {
@@ -168,9 +246,14 @@ export default function WhatsAppInbox({
   }, [loadConversations]);
 
   useEffect(() => {
-    conversations.slice(0, 25).forEach((conversation) => {
-      if (!conversation.contact_avatar_url) void refreshAvatar(conversation);
-    });
+    const missing = conversations.filter((conversation) => !conversation.contact_avatar_url).slice(0, 5);
+    if (!missing.length || avatarSyncBlockedRef.current) return;
+    void (async () => {
+      for (const conversation of missing) {
+        if (avatarSyncBlockedRef.current) break;
+        await refreshAvatar(conversation);
+      }
+    })();
   }, [conversations, refreshAvatar]);
 
   useEffect(
@@ -392,21 +475,24 @@ export default function WhatsAppInbox({
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return conversations;
-    return conversations.filter((item) =>
-      [
+    return conversations.filter((item) => {
+      if (conversationFilter === "unread" && item.unread_count <= 0) return false;
+      if (conversationFilter === "leads" && !item.lead) return false;
+      if (!query) return true;
+      return [
         item.contact_name,
         item.contact_phone,
         item.last_message_preview,
-        item.leads?.name,
-        item.leads?.company_name,
+        item.lead?.name,
+        item.lead?.company_name,
+        item.lead?.pipeline_stages?.name,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
-        .includes(query),
-    );
-  }, [conversations, search]);
+        .includes(query);
+    });
+  }, [conversations, search, conversationFilter]);
 
   const previewIcon = (conversation: Conversation) => {
     const preview = conversation.last_message_preview || "Sem mensagens";
@@ -417,8 +503,10 @@ export default function WhatsAppInbox({
     const signedUrl = message.media_url ? mediaUrls[message.media_url] : null;
     return (
       <>
-        {signedUrl && message.message_type === "image" && (
-          <img className="wa-media-image" src={signedUrl} alt={message.body || "Imagem"} />
+        {signedUrl && (message.message_type === "image" || message.message_type === "sticker") && (
+          <a className="wa-media-open" href={signedUrl} target="_blank" rel="noreferrer" aria-label="Abrir imagem">
+            <img className={"wa-media-image " + (message.message_type === "sticker" ? "sticker" : "")} src={signedUrl} alt={message.body || (message.message_type === "sticker" ? "Figurinha" : "Imagem")} />
+          </a>
         )}
         {signedUrl && message.message_type === "video" && (
           <video className="wa-media-video" controls playsInline src={signedUrl} />
@@ -428,7 +516,7 @@ export default function WhatsAppInbox({
         )}
         {signedUrl && message.message_type === "document" && (
           <a className="wa-document-card" href={signedUrl} target="_blank" rel="noreferrer">
-            <span className="wa-document-icon">PDF</span>
+            <span className="wa-document-icon">{documentLabel(message.media_mime_type)}</span>
             <span><strong>{message.media_filename || "Documento"}</strong><small>Abrir documento</small></span>
           </a>
         )}
@@ -452,7 +540,7 @@ export default function WhatsAppInbox({
           {message.direction === "outbound" && (
             <span
               className={"wa-message-status " + (message.status === "read" || message.read_at ? "read" : message.status)}
-              title={message.status}
+              title={messageStatusTitle(message)}
             >
               {messageState(message)}
             </span>
@@ -480,13 +568,19 @@ export default function WhatsAppInbox({
 
         <div className="wa-search">
           <span>⌕</span>
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar ou iniciar nova conversa" />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar conversa" />
+        </div>
+
+        <div className="wa-filters" aria-label="Filtros de conversas">
+          <button className={conversationFilter === "all" ? "active" : ""} onClick={() => setConversationFilter("all")}>Todas</button>
+          <button className={conversationFilter === "unread" ? "active" : ""} onClick={() => setConversationFilter("unread")}>Não lidas</button>
+          <button className={conversationFilter === "leads" ? "active" : ""} onClick={() => setConversationFilter("leads")}>Leads</button>
         </div>
 
         <div className="wa-conversations">
           {filtered.length ? (
             filtered.map((conversation) => {
-              const displayName = conversation.contact_name || conversation.leads?.name || conversation.contact_phone;
+              const displayName = conversation.lead?.name || conversation.contact_name || conversation.contact_phone;
               return (
                 <button
                   key={conversation.id}
@@ -503,17 +597,17 @@ export default function WhatsAppInbox({
                       <small>{previewIcon(conversation)}</small>
                       {conversation.unread_count > 0 && <b>{conversation.unread_count}</b>}
                     </span>
-                    {conversation.lead_id && (
+                    {conversation.lead && (
                       <span
                         className="wa-lead-context"
                         role={onOpenLead ? "button" : undefined}
                         onClick={(event) => {
                           if (!onOpenLead) return;
                           event.stopPropagation();
-                          onOpenLead(conversation.lead_id!);
+                          onOpenLead(conversation.lead!.id);
                         }}
                       >
-                        Lead{conversation.leads?.company_name ? " · " + conversation.leads.company_name : ""}
+                        Lead{conversation.lead.company_name ? " · " + conversation.lead.company_name : ""}
                       </span>
                     )}
                   </span>
@@ -535,21 +629,45 @@ export default function WhatsAppInbox({
           <>
             <header className="wa-chat-head">
               <button type="button" className="wa-back" onClick={() => setSelectedId(null)} aria-label="Voltar para conversas">‹</button>
-              <Avatar name={selected.contact_name || selected.contact_phone} url={selected.contact_avatar_url} />
+              <Avatar name={selected.lead?.name || selected.contact_name || selected.contact_phone} url={selected.contact_avatar_url} />
               <div className="wa-chat-contact">
-                <strong>{selected.contact_name || selected.leads?.name || selected.contact_phone}</strong>
-                <small>{selected.leads?.company_name || selected.contact_phone}</small>
+                <strong>{selected.lead?.name || selected.contact_name || selected.contact_phone}</strong>
+                <small>
+                  {selected.lead?.company_name
+                    ? selected.lead.company_name + (selected.lead.pipeline_stages?.name ? " · " + selected.lead.pipeline_stages.name : "")
+                    : selected.contact_phone}
+                </small>
               </div>
-              <span className="wa-chat-actions">⋮</span>
+              {selected.lead && onOpenLead ? (
+                <button type="button" className="wa-lead-action" onClick={() => onOpenLead(selected.lead!.id)}>Ver lead</button>
+              ) : onCreateLead ? (
+                <button
+                  type="button"
+                  className="wa-lead-action"
+                  onClick={() => onCreateLead({
+                    name: selected.contact_name || selected.contact_phone,
+                    phone: selected.contact_phone,
+                    conversationId: selected.id,
+                  })}
+                >
+                  + Lead
+                </button>
+              ) : null}
             </header>
 
             <div className="wa-messages">
-              <div className="wa-day-divider"><span>HOJE</span></div>
-              {messages.map((message) => (
-                <article key={message.id} className={"wa-bubble " + message.direction}>
-                  {renderMessageContent(message)}
-                </article>
-              ))}
+              {messages.map((message, index) => {
+                const previous = index > 0 ? messages[index - 1] : null;
+                const showDay = !previous || new Date(previous.created_at).toDateString() !== new Date(message.created_at).toDateString();
+                return (
+                  <Fragment key={message.id}>
+                    {showDay && <div className="wa-day-divider"><span>{fmtMessageDay(message.created_at)}</span></div>}
+                    <article className={"wa-bubble " + message.direction}>
+                      {renderMessageContent(message)}
+                    </article>
+                  </Fragment>
+                );
+              })}
               <div ref={messagesEndRef} />
             </div>
 
