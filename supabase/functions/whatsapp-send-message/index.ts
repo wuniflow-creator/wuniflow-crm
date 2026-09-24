@@ -72,7 +72,8 @@ Deno.serve(async (req: Request) => {
 
   const phone = String(conversation.contact_phone).replace(/\D/g, "");
   let endpoint: string;
-  let providerBody: Record<string, unknown>;
+  let providerBody: BodyInit;
+  let providerHeaders: Record<string, string> = { apikey: evolutionKey };
   let messageType = "text";
   let mediaPath: string | null = null;
   let mediaMime: string | null = null;
@@ -115,19 +116,33 @@ Deno.serve(async (req: Request) => {
     if (file.size > 25 * 1024 * 1024) return respond({ error: "media_too_large" }, 413);
 
     const bytes = new Uint8Array(await file.arrayBuffer());
-    let binary = "";
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)));
-    }
-    const base64 = btoa(binary);
 
     if (messageType === "audio") {
+      // Evolution API 2.3.7 accepts multipart on sendWhatsAppAudio and its
+      // internal audio service requires req.file.buffer for this channel.
+      // Sending only JSON/base64 can reach the controller but fail later with
+      // "File or buffer is undefined".
       endpoint = evolutionUrl + "/message/sendWhatsAppAudio/" + encodeURIComponent(channel.instance_name);
-      providerBody = { number: phone, audio: base64, encoding: true };
+      const form = new FormData();
+      const extension =
+        mediaMime === "audio/ogg" ? "ogg" :
+        mediaMime === "audio/mp4" ? "m4a" :
+        mediaMime === "audio/mpeg" ? "mp3" : "webm";
+      const filename = mediaFilename || ("audio-" + Date.now() + "." + extension);
+      form.append("number", phone);
+      form.append("encoding", "true");
+      form.append("file", new Blob([bytes], { type: mediaMime }), filename);
+      providerBody = form;
     } else {
+      let binary = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+      }
+      const base64 = btoa(binary);
+
       endpoint = evolutionUrl + "/message/sendMedia/" + encodeURIComponent(channel.instance_name);
-      providerBody = {
+      const jsonBody: Record<string, unknown> = {
         number: phone,
         mediatype: messageType,
         mimetype: mediaMime,
@@ -138,20 +153,23 @@ Deno.serve(async (req: Request) => {
 
       // Evolution API 2.3.7 has a known filename casing inconsistency for images.
       if (messageType === "image" && mediaFilename) {
-        providerBody.filename = mediaFilename;
+        jsonBody.filename = mediaFilename;
       }
+      providerHeaders["content-type"] = "application/json";
+      providerBody = JSON.stringify(jsonBody);
     }
   } else {
     endpoint = evolutionUrl + "/message/sendText/" + encodeURIComponent(channel.instance_name);
-    providerBody = { number: phone, text };
+    providerHeaders["content-type"] = "application/json";
+    providerBody = JSON.stringify({ number: phone, text });
   }
 
   let response: Response;
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json", apikey: evolutionKey },
-      body: JSON.stringify(providerBody),
+      headers: providerHeaders,
+      body: providerBody,
     });
   } catch {
     return respond({ error: "evolution_unreachable" }, 502);
@@ -163,7 +181,24 @@ Deno.serve(async (req: Request) => {
   } catch {}
 
   if (!response.ok) {
-    return respond({ error: "send_failed", provider_status: response.status }, 502);
+    const providerMessage =
+      provider?.response?.message ??
+      provider?.message ??
+      provider?.error ??
+      null;
+    console.error("whatsapp-send-message provider failure", {
+      status: response.status,
+      messageType,
+      providerMessage,
+    });
+    return respond(
+      {
+        error: "send_failed",
+        provider_status: response.status,
+        provider_message: typeof providerMessage === "string" ? providerMessage.slice(0, 300) : providerMessage,
+      },
+      502,
+    );
   }
 
   const providerMessageId = provider?.key?.id ?? provider?.response?.key?.id ?? null;
