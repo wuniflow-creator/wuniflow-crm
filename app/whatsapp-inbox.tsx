@@ -67,9 +67,11 @@ function Avatar({ name, url, size = "normal" }: { name: string; url: string | nu
 export default function WhatsAppInbox({
   organizationId,
   onOpenMenu,
+  onOpenLead,
 }: {
   organizationId: string;
   onOpenMenu?: () => void;
+  onOpenLead?: (leadId: string) => void;
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -482,7 +484,15 @@ export default function WhatsAppInbox({
                       {conversation.unread_count > 0 && <b>{conversation.unread_count}</b>}
                     </span>
                     {conversation.lead_id && (
-                      <span className="wa-lead-context">
+                      <span
+                        className="wa-lead-context"
+                        role={onOpenLead ? "button" : undefined}
+                        onClick={(event) => {
+                          if (!onOpenLead) return;
+                          event.stopPropagation();
+                          onOpenLead(conversation.lead_id!);
+                        }}
+                      >
                         Lead{conversation.leads?.company_name ? " · " + conversation.leads.company_name : ""}
                       </span>
                     )}
