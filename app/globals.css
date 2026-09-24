@@ -7,3 +7,5 @@
 .wa-compose-wrap{border-top:1px solid var(--line);background:#111116}.wa-compose-wrap .wa-compose{border-top:0}.wa-send-error{margin:0;padding:0 13px 12px;color:#fda4af;font-size:11px}.wa-compose button:not(:disabled){opacity:1;cursor:pointer}
 
 .wa-message-status{font-weight:600}.wa-message-status.read{font-weight:700}.wa-message-status.failed{font-weight:700}
+
+.wa-media-image,.wa-media-video{display:block;max-width:min(320px,100%);max-height:360px;border-radius:12px;margin:8px 0;object-fit:cover}.wa-media-audio{display:block;max-width:100%;margin:8px 0}.wa-media-link{display:inline-block;margin:8px 0;text-decoration:underline;font-weight:600}
