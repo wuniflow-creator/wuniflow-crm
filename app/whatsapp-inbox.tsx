@@ -13,6 +13,9 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
  const [selectedId,setSelectedId]=useState<string|null>(null);
  const [messages,setMessages]=useState<Message[]>([]);
  const [search,setSearch]=useState("");
+ const [draft,setDraft]=useState("");
+ const [sending,setSending]=useState(false);
+ const [sendError,setSendError]=useState<string|null>(null);
 
  const loadConversations=useCallback(async()=>{
   if(!supabase)return;
@@ -37,6 +40,8 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
   return()=>{void supabase?.removeChannel(ch)};
  },[organizationId,selectedId,loadConversations,loadMessages]);
 
+ const sendMessage=async()=>{if(!supabase||!selectedId||!draft.trim()||sending)return;setSending(true);setSendError(null);const text=draft.trim();const {error}=await supabase.functions.invoke("whatsapp-send-message",{body:{conversation_id:selectedId,text}});if(error){setSendError("Não foi possível enviar. A integração de saída ainda precisa da credencial segura da Evolution.");setSending(false);return}setDraft("");await loadMessages(selectedId);await loadConversations();setSending(false)};
+
  const selected=conversations.find(x=>x.id===selectedId)||null;
  const filtered=useMemo(()=>{const q=search.trim().toLowerCase();return q?conversations.filter(x=>((x.contact_name||"")+" "+x.contact_phone+" "+(x.last_message_preview||"")).toLowerCase().includes(q)):conversations},[conversations,search]);
 
@@ -46,6 +51,6 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
    <div className="wa-search"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar conversa…" /></div>
    <div className="wa-conversations">{filtered.length?filtered.map(x=><button key={x.id} className={"wa-conversation "+(x.id===selectedId?"active":"")} onClick={()=>setSelectedId(x.id)}><span className="wa-avatar">{(x.contact_name||x.contact_phone).slice(0,1).toUpperCase()}</span><span className="wa-copy"><strong>{x.contact_name||x.contact_phone}</strong><small>{x.last_message_preview||"Sem mensagem"}</small></span><span className="wa-meta"><small>{fmt(x.last_message_at)}</small>{x.unread_count>0&&<b>{x.unread_count}</b>}</span></button>):<p className="wa-empty">Nenhuma conversa recebida.</p>}</div>
   </div>
-  <div className="wa-chat">{selected?<><div className="wa-chat-head"><span className="wa-avatar">{(selected.contact_name||selected.contact_phone).slice(0,1).toUpperCase()}</span><div><strong>{selected.contact_name||selected.contact_phone}</strong><small>{selected.contact_phone}</small></div></div><div className="wa-messages">{messages.map(m=><article key={m.id} className={"wa-bubble "+m.direction}><p>{m.body||"["+m.message_type+"]"}</p><small>{fmt(m.created_at)} · {m.status}</small></article>)}</div><div className="wa-compose"><input disabled placeholder="Envio pelo CRM será habilitado na próxima etapa" /><button disabled>Enviar</button></div></>:<div className="wa-chat-empty"><strong>WhatsApp Wuniflow</strong><p>Selecione uma conversa.</p></div>}</div>
+  <div className="wa-chat">{selected?<><div className="wa-chat-head"><span className="wa-avatar">{(selected.contact_name||selected.contact_phone).slice(0,1).toUpperCase()}</span><div><strong>{selected.contact_name||selected.contact_phone}</strong><small>{selected.contact_phone}</small></div></div><div className="wa-messages">{messages.map(m=><article key={m.id} className={"wa-bubble "+m.direction}><p>{m.body||"["+m.message_type+"]"}</p><small>{fmt(m.created_at)} · {m.status}</small></article>)}</div><div className="wa-compose-wrap"><div className="wa-compose"><input value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void sendMessage()}}} disabled={sending} placeholder="Digite uma mensagem…" /><button onClick={()=>void sendMessage()} disabled={sending||!draft.trim()}>{sending?"Enviando…":"Enviar"}</button></div>{sendError&&<p className="wa-send-error">{sendError}</p>}</div></>:<div className="wa-chat-empty"><strong>WhatsApp Wuniflow</strong><p>Selecione uma conversa.</p></div>}</div>
  </section>;
 }
