@@ -23,7 +23,9 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
  const [draft,setDraft]=useState("");
  const [sending,setSending]=useState(false);
  const [sendError,setSendError]=useState<string|null>(null);
- const [mediaUrls,setMediaUrls]=useState<Record<string,string>>({});\n const [attachment,setAttachment]=useState<File|null>(null);\n const fileInputRef=useRef<HTMLInputElement|null>(null);
+ const [mediaUrls,setMediaUrls]=useState<Record<string,string>>({});
+ const [attachment,setAttachment]=useState<File|null>(null);
+ const fileInputRef=useRef<HTMLInputElement|null>(null);
  const messagesEndRef=useRef<HTMLDivElement|null>(null);
 
  const loadConversations=useCallback(async()=>{
@@ -53,7 +55,7 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
  },[organizationId,selectedId,loadConversations,loadMessages]);
 
  const sendMessage=async()=>{
-  if(!supabase||!selectedId||!draft.trim()||sending)return;
+  if(!supabase||!selectedId||(!draft.trim()&&!attachment)||sending)return;
   setSending(true); setSendError(null);
   const messageText=draft.trim();
   try{
