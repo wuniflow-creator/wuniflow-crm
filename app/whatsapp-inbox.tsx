@@ -363,12 +363,12 @@ export default function WhatsAppInbox({
       });
 
       if (error || !data?.ok) {
-        let detail = data?.provider_message || data?.error || "";
+        let detail = data?.provider_message || data?.reason || data?.error || "";
         const context = (error as { context?: Response } | null)?.context;
         if (!detail && context) {
           try {
             const payload = await context.clone().json();
-            detail = payload?.provider_message || payload?.error || "";
+            detail = payload?.provider_message || payload?.reason || payload?.error || "";
           } catch {}
         }
         setSendError("Falha no envio" + (detail ? ": " + String(detail) : ". Tente novamente."));
