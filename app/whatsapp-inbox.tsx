@@ -46,6 +46,15 @@ const fmtListTime = (value: string | null) => {
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(date);
 };
 
+const commonEmojis = [
+  "😀","😃","😄","😁","😂","🤣","😊","😍",
+  "🥰","😘","😎","🤩","🥳","😅","😉","🤔",
+  "👍","👎","👏","🙌","🙏","💪","🤝","👌",
+  "❤️","💜","💙","💚","💛","🔥","✨","🎉",
+  "✅","❌","⚠️","📌","📞","💬","📅","🚀",
+  "👋","🙂","😢","😭","😡","🤯","💡","⭐"
+];
+
 const messageState = (m: Message) => {
   if (m.direction === "inbound") return "";
   if (m.status === "read" || m.read_at) return "✓✓";
@@ -85,6 +94,7 @@ export default function WhatsAppInbox({
   const [recording, setRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -178,6 +188,7 @@ export default function WhatsAppInbox({
   useEffect(() => {
     if (!selectedId) {
       setMessages([]);
+      setEmojiOpen(false);
       return;
     }
     void loadMessages(selectedId);
@@ -352,11 +363,20 @@ export default function WhatsAppInbox({
       });
 
       if (error || !data?.ok) {
-        setSendError("Falha no envio: " + (data?.error || error?.message || "send_failed"));
+        let detail = data?.provider_message || data?.error || "";
+        const context = (error as { context?: Response } | null)?.context;
+        if (!detail && context) {
+          try {
+            const payload = await context.clone().json();
+            detail = payload?.provider_message || payload?.error || "";
+          } catch {}
+        }
+        setSendError("Falha no envio" + (detail ? ": " + String(detail) : ". Tente novamente."));
         return;
       }
 
       setDraft("");
+      setEmojiOpen(false);
       setAttachment(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       await loadMessages(selectedId);
@@ -560,6 +580,21 @@ export default function WhatsAppInbox({
 
               {(recordingError || sendError) && <p className="wa-send-error">{recordingError || sendError}</p>}
 
+              {emojiOpen && (
+                <div className="wa-emoji-picker" role="dialog" aria-label="Selecionar emoji">
+                  {commonEmojis.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => setDraft((current) => current + emoji)}
+                      aria-label={"Inserir " + emoji}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="wa-compose">
                 <input
                   ref={fileInputRef}
@@ -575,7 +610,16 @@ export default function WhatsAppInbox({
                 <button type="button" className="wa-attach" onClick={() => fileInputRef.current?.click()} disabled={sending || recording} title="Anexar arquivo">＋</button>
 
                 <div className="wa-message-field">
-                  <span className="wa-emoji">☺</span>
+                  <button
+                    type="button"
+                    className={"wa-emoji " + (emojiOpen ? "active" : "")}
+                    onClick={() => setEmojiOpen((current) => !current)}
+                    disabled={sending || recording}
+                    aria-label="Abrir emojis"
+                    title="Emojis"
+                  >
+                    ☺
+                  </button>
                   <input
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
