@@ -3,31 +3,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type LeadSummary = {
-  id: string;
-  name: string;
-  company_name: string | null;
-  whatsapp: string | null;
-  phone: string | null;
-  priority: string;
-  status: string;
-  stage_id: string;
-  pipeline_stages: { name: string; color: string | null } | null;
-};
-
+type LeadSummary = { name: string; company_name: string | null };
 type Conversation = {
   id: string;
   contact_name: string | null;
   contact_phone: string;
   contact_avatar_url: string | null;
   lead_id: string | null;
+  leads: LeadSummary | null;
   last_message_at: string | null;
   last_message_preview: string | null;
   unread_count: number;
   status: string;
-  lead?: LeadSummary | null;
 };
-
 type Message = {
   id: string;
   conversation_id: string;
@@ -43,38 +31,45 @@ type Message = {
   read_at: string | null;
 };
 
-type SyncProfile = { id: string; url: string | null };
-
-const normalizePhone = (value: string | null | undefined) => (value || "").replace(/\D/g, "");
-const fmt = (value: string | null) =>
+const fmtTime = (value: string | null) =>
   value ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)) : "";
 
-const messageState = (message: Message) => {
-  if (message.direction === "inbound") return "";
-  if (message.status === "read" || message.read_at) return "✓✓";
-  if (message.status === "delivered" || message.delivered_at) return "✓✓";
-  if (message.status === "failed") return "!";
+const fmtListTime = (value: string | null) => {
+  if (!value) return "";
+  const date = new Date(value);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  if (sameDay) return fmtTime(value);
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return "Ontem";
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(date);
+};
+
+const messageState = (m: Message) => {
+  if (m.direction === "inbound") return "";
+  if (m.status === "read" || m.read_at) return "✓✓";
+  if (m.status === "delivered" || m.delivered_at) return "✓✓";
+  if (m.status === "failed") return "!";
   return "✓";
 };
 
-const messageFallback: Record<string, string> = {
-  image: "📷 Imagem",
-  audio: "🎵 Áudio",
-  video: "🎥 Vídeo",
-  document: "📄 Documento",
-  sticker: "🏷️ Figurinha",
-  location: "📍 Localização",
-  contact: "👤 Contato",
-};
+function Avatar({ name, url, size = "normal" }: { name: string; url: string | null; size?: "normal" | "large" }) {
+  const [broken, setBroken] = useState(false);
+  const initial = (name || "?").trim().slice(0, 1).toUpperCase();
+  return (
+    <span className={"wa-avatar " + (size === "large" ? "large" : "")}>
+      {url && !broken ? <img src={url} alt="" onError={() => setBroken(true)} /> : <span>{initial}</span>}
+    </span>
+  );
+}
 
 export default function WhatsAppInbox({
   organizationId,
   onOpenMenu,
-  onOpenLead,
 }: {
   organizationId: string;
   onOpenMenu?: () => void;
-  onOpenLead?: (leadId: string) => void;
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -88,10 +83,6 @@ export default function WhatsAppInbox({
   const [recording, setRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [recordingError, setRecordingError] = useState<string | null>(null);
-  const [avatarErrors, setAvatarErrors] = useState<Record<string, boolean>>({});
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== "undefined" ? window.matchMedia("(max-width: 800px)").matches : false,
-  );
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -99,82 +90,65 @@ export default function WhatsAppInbox({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const profileSyncRef = useRef<Set<string>>(new Set());
+  const avatarTriedRef = useRef<Set<string>>(new Set());
 
   const loadConversations = useCallback(async () => {
     if (!supabase) return;
+    const { data } = await supabase
+      .from("whatsapp_conversations")
+      .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,last_message_at,last_message_preview,unread_count,status,leads(name,company_name)")
+      .eq("organization_id", organizationId)
+      .neq("status", "archived")
+      .order("last_message_at", { ascending: false, nullsFirst: false });
 
-    const [{ data: conversationData }, { data: leadData }] = await Promise.all([
-      supabase
-        .from("whatsapp_conversations")
-        .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,last_message_at,last_message_preview,unread_count,status")
-        .eq("organization_id", organizationId)
-        .neq("status", "archived")
-        .order("last_message_at", { ascending: false, nullsFirst: false }),
-      supabase
-        .from("leads")
-        .select("id,name,company_name,whatsapp,phone,priority,status,stage_id,pipeline_stages(name,color)")
-        .eq("organization_id", organizationId)
-        .neq("status", "archived")
-        .limit(1000),
-    ]);
-
-    const leads = (leadData || []) as unknown as LeadSummary[];
-    const leadById = new Map(leads.map((lead) => [lead.id, lead]));
-    const leadByPhone = new Map<string, LeadSummary>();
-
-    for (const lead of leads) {
-      const numbers = [normalizePhone(lead.whatsapp), normalizePhone(lead.phone)].filter(Boolean);
-      for (const number of numbers) {
-        if (!leadByPhone.has(number)) leadByPhone.set(number, lead);
-      }
-    }
-
-    const rows = ((conversationData || []) as Omit<Conversation, "lead">[]).map((conversation) => ({
-      ...conversation,
-      lead: (conversation.lead_id ? leadById.get(conversation.lead_id) : null) || leadByPhone.get(normalizePhone(conversation.contact_phone)) || null,
-    }));
-
-    setConversations(rows);
-    setSelectedId((current) => (current && rows.some((row) => row.id === current) ? current : null));
+    setConversations((data || []) as unknown as Conversation[]);
   }, [organizationId]);
 
-  const loadMessages = useCallback(
-    async (id: string) => {
-      if (!supabase) return;
-      const { data } = await supabase
-        .from("whatsapp_messages")
-        .select("id,conversation_id,direction,message_type,body,media_url,media_mime_type,media_filename,status,created_at,delivered_at,read_at")
-        .eq("organization_id", organizationId)
-        .eq("conversation_id", id)
-        .order("created_at", { ascending: true })
-        .limit(300);
+  const loadMessages = useCallback(async (id: string) => {
+    if (!supabase) return;
+    const { data } = await supabase
+      .from("whatsapp_messages")
+      .select("id,conversation_id,direction,message_type,body,media_url,media_mime_type,media_filename,status,created_at,delivered_at,read_at")
+      .eq("organization_id", organizationId)
+      .eq("conversation_id", id)
+      .order("created_at", { ascending: true })
+      .limit(300);
 
-      const rows = (data || []) as Message[];
-      setMessages(rows);
+    const rows = (data || []) as Message[];
+    setMessages(rows);
 
-      const paths = [...new Set(rows.filter((message) => message.media_url).map((message) => message.media_url!))];
-      if (!paths.length) {
-        setMediaUrls({});
-        return;
-      }
+    const paths = rows.filter((message) => message.media_url).map((message) => message.media_url!);
+    if (!paths.length) {
+      setMediaUrls({});
+      return;
+    }
 
-      const { data: signed } = await supabase.storage.from("whatsapp-media").createSignedUrls(paths, 3600);
-      const next: Record<string, string> = {};
-      signed?.forEach((item, index) => {
-        if (item.signedUrl) next[paths[index]] = item.signedUrl;
-      });
-      setMediaUrls(next);
-    },
-    [organizationId],
-  );
+    const { data: signed } = await supabase.storage.from("whatsapp-media").createSignedUrls(paths, 3600);
+    const next: Record<string, string> = {};
+    signed?.forEach((item, index) => {
+      if (item.signedUrl) next[paths[index]] = item.signedUrl;
+    });
+    setMediaUrls(next);
+  }, [organizationId]);
 
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 800px)");
-    const update = () => setIsMobile(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
+  const refreshAvatar = useCallback(async (conversation: Conversation) => {
+    if (!supabase || conversation.contact_avatar_url || avatarTriedRef.current.has(conversation.id)) return;
+    avatarTriedRef.current.add(conversation.id);
+    const session = await supabase.auth.getSession();
+    const token = session.data.session?.access_token;
+    if (!token) return;
+
+    const { data, error } = await supabase.functions.invoke("whatsapp-contact-profile", {
+      body: { conversation_id: conversation.id },
+      headers: { Authorization: "Bearer " + token },
+    });
+    if (error || !data?.profile_picture_url) return;
+
+    setConversations((current) =>
+      current.map((item) =>
+        item.id === conversation.id ? { ...item, contact_avatar_url: data.profile_picture_url as string } : item,
+      ),
+    );
   }, []);
 
   useEffect(() => {
@@ -182,34 +156,10 @@ export default function WhatsAppInbox({
   }, [loadConversations]);
 
   useEffect(() => {
-    if (!isMobile && !selectedId && conversations[0]?.id) setSelectedId(conversations[0].id);
-  }, [isMobile, selectedId, conversations]);
-
-  useEffect(() => {
-    if (!supabase) return;
-    const missing = conversations
-      .filter((conversation) => !conversation.contact_avatar_url && !profileSyncRef.current.has(conversation.id))
-      .slice(0, 20);
-
-    if (!missing.length) return;
-    missing.forEach((conversation) => profileSyncRef.current.add(conversation.id));
-
-    void supabase.functions
-      .invoke("whatsapp-sync-profiles", { body: { conversation_ids: missing.map((conversation) => conversation.id) } })
-      .then(({ data }) => {
-        const profiles = (data?.profiles || []) as SyncProfile[];
-        if (!profiles.length) return;
-        const profileMap = new Map(profiles.filter((profile) => profile.url).map((profile) => [profile.id, profile.url!]));
-        if (!profileMap.size) return;
-        setConversations((current) =>
-          current.map((conversation) =>
-            profileMap.has(conversation.id)
-              ? { ...conversation, contact_avatar_url: profileMap.get(conversation.id)! }
-              : conversation,
-          ),
-        );
-      });
-  }, [conversations]);
+    conversations.slice(0, 25).forEach((conversation) => {
+      if (!conversation.contact_avatar_url) void refreshAvatar(conversation);
+    });
+  }, [conversations, refreshAvatar]);
 
   useEffect(
     () => () => {
@@ -224,15 +174,13 @@ export default function WhatsAppInbox({
   }, [messages, selectedId]);
 
   useEffect(() => {
-    if (selectedId) {
-      void loadMessages(selectedId);
-      if (supabase) {
-        void supabase.rpc("mark_whatsapp_conversation_read", { p_conversation_id: selectedId }).then(() => loadConversations());
-      }
-    } else {
+    if (!selectedId) {
       setMessages([]);
-      setAttachment(null);
-      setDraft("");
+      return;
+    }
+    void loadMessages(selectedId);
+    if (supabase) {
+      void supabase.rpc("mark_whatsapp_conversation_read", { p_conversation_id: selectedId }).then(() => loadConversations());
     }
   }, [selectedId, loadMessages, loadConversations]);
 
@@ -293,17 +241,14 @@ export default function WhatsAppInbox({
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) recordingChunksRef.current.push(event.data);
       };
-
       recorder.onerror = () => {
         setRecordingError("Não foi possível gravar o áudio.");
         setRecording(false);
         finishRecordingResources();
       };
-
       recorder.onstop = () => {
         const normalized = (recorder.mimeType || mimeType || "audio/webm").toLowerCase().split(";")[0].trim();
-        const extension =
-          normalized === "audio/ogg" ? "ogg" : normalized === "audio/mp4" ? "m4a" : normalized === "audio/mpeg" ? "mp3" : "webm";
+        const extension = normalized === "audio/ogg" ? "ogg" : normalized === "audio/mp4" ? "m4a" : normalized === "audio/mpeg" ? "mp3" : "webm";
         const blob = new Blob(recordingChunksRef.current, { type: normalized });
         recordingChunksRef.current = [];
         finishRecordingResources();
@@ -338,9 +283,13 @@ export default function WhatsAppInbox({
     if (recorder && recorder.state !== "inactive") recorder.stop();
   };
 
+  const recordLabel =
+    Math.floor(recordSeconds / 60).toString().padStart(2, "0") +
+    ":" +
+    (recordSeconds % 60).toString().padStart(2, "0");
+
   const sendMessage = async () => {
     if (!supabase || !selectedId || (!draft.trim() && !attachment) || sending || recording) return;
-
     setSending(true);
     setSendError(null);
     const messageText = draft.trim();
@@ -362,14 +311,7 @@ export default function WhatsAppInbox({
         }
 
         const mime = (attachment.type || "application/octet-stream").toLowerCase().split(";")[0].trim();
-        const type = mime.startsWith("image/")
-          ? "image"
-          : mime.startsWith("video/")
-            ? "video"
-            : mime.startsWith("audio/")
-              ? "audio"
-              : "document";
-
+        const type = mime.startsWith("image/") ? "image" : mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : "document";
         const allowedMime: Record<string, string[]> = {
           image: ["image/jpeg", "image/png", "image/webp"],
           video: ["video/mp4"],
@@ -408,8 +350,7 @@ export default function WhatsAppInbox({
       });
 
       if (error || !data?.ok) {
-        const code = data?.error || error?.message || "send_failed";
-        setSendError("Falha no envio: " + code);
+        setSendError("Falha no envio: " + (data?.error || error?.message || "send_failed"));
         return;
       }
 
@@ -425,22 +366,18 @@ export default function WhatsAppInbox({
     }
   };
 
-  const selected = conversations.find((conversation) => conversation.id === selectedId) || null;
-  const selectedLead = selected?.lead || null;
-  const recordLabel =
-    Math.floor(recordSeconds / 60).toString().padStart(2, "0") + ":" + (recordSeconds % 60).toString().padStart(2, "0");
+  const selected = conversations.find((item) => item.id === selectedId) || null;
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return conversations;
-    return conversations.filter((conversation) =>
+    return conversations.filter((item) =>
       [
-        conversation.contact_name,
-        conversation.contact_phone,
-        conversation.last_message_preview,
-        conversation.lead?.name,
-        conversation.lead?.company_name,
-        conversation.lead?.pipeline_stages?.name,
+        item.contact_name,
+        item.contact_phone,
+        item.last_message_preview,
+        item.leads?.name,
+        item.leads?.company_name,
       ]
         .filter(Boolean)
         .join(" ")
@@ -449,39 +386,74 @@ export default function WhatsAppInbox({
     );
   }, [conversations, search]);
 
-  const renderAvatar = (conversation: Conversation, extraClass = "") => {
-    const name = conversation.lead?.name || conversation.contact_name || conversation.contact_phone;
-    const canShowImage = Boolean(conversation.contact_avatar_url && !avatarErrors[conversation.id]);
+  const previewIcon = (conversation: Conversation) => {
+    const preview = conversation.last_message_preview || "Sem mensagens";
+    return preview;
+  };
 
+  const renderMessageContent = (message: Message) => {
+    const signedUrl = message.media_url ? mediaUrls[message.media_url] : null;
     return (
-      <span className={"wa-avatar " + extraClass}>
-        {canShowImage ? (
-          <img
-            src={conversation.contact_avatar_url!}
-            alt={"Foto de " + name}
-            onError={() => setAvatarErrors((current) => ({ ...current, [conversation.id]: true }))}
-          />
-        ) : (
-          <span>{name.slice(0, 1).toUpperCase()}</span>
+      <>
+        {signedUrl && message.message_type === "image" && (
+          <img className="wa-media-image" src={signedUrl} alt={message.body || "Imagem"} />
         )}
-      </span>
+        {signedUrl && message.message_type === "video" && (
+          <video className="wa-media-video" controls playsInline src={signedUrl} />
+        )}
+        {signedUrl && message.message_type === "audio" && (
+          <audio className="wa-media-audio" controls preload="metadata" src={signedUrl} />
+        )}
+        {signedUrl && message.message_type === "document" && (
+          <a className="wa-document-card" href={signedUrl} target="_blank" rel="noreferrer">
+            <span className="wa-document-icon">PDF</span>
+            <span><strong>{message.media_filename || "Documento"}</strong><small>Abrir documento</small></span>
+          </a>
+        )}
+        {message.body && <p>{message.body}</p>}
+        {!message.body && !signedUrl && (
+          <p className="wa-media-placeholder">
+            {message.media_filename ||
+              ({
+                image: "📷 Imagem",
+                audio: "🎵 Áudio",
+                video: "🎥 Vídeo",
+                document: "📄 Documento",
+                sticker: "🏷️ Figurinha",
+                location: "📍 Localização",
+                contact: "👤 Contato",
+              }[message.message_type] || "[" + message.message_type + "]")}
+          </p>
+        )}
+        <small className="wa-message-meta">
+          {fmtTime(message.created_at)}
+          {message.direction === "outbound" && (
+            <span
+              className={"wa-message-status " + (message.status === "read" || message.read_at ? "read" : message.status)}
+              title={message.status}
+            >
+              {messageState(message)}
+            </span>
+          )}
+        </small>
+      </>
     );
   };
 
   return (
-    <section className={"wa-shell " + (isMobile && selectedId ? "mobile-chat-open" : "")}>
-      <div className="wa-list">
-        <div className="wa-list-toolbar">
-          <button type="button" className="wa-global-menu" onClick={onOpenMenu} aria-label="Abrir menu do CRM">
-            ☰
-          </button>
+    <section className={"wa-shell " + (selectedId ? "chat-open" : "")}>
+      <aside className="wa-list">
+        <div className="wa-mobile-topbar">
+          <button type="button" className="wa-mobile-menu" onClick={onOpenMenu} aria-label="Abrir menu do CRM">☰</button>
+          <strong>WhatsApp</strong>
+          <span className="wa-topbar-spacer" />
+        </div>
+
+        <div className="wa-list-head">
           <div>
-            <strong>WhatsApp</strong>
-            <small>{conversations.reduce((total, conversation) => total + conversation.unread_count, 0)} não lidas</small>
+            <h2>Conversas</h2>
+            <small>{conversations.reduce((count, item) => count + item.unread_count, 0)} não lidas</small>
           </div>
-          <button type="button" className="wa-refresh" onClick={() => void loadConversations()} title="Atualizar conversas">
-            ↻
-          </button>
         </div>
 
         <div className="wa-search">
@@ -492,85 +464,60 @@ export default function WhatsAppInbox({
         <div className="wa-conversations">
           {filtered.length ? (
             filtered.map((conversation) => {
-              const displayName = conversation.lead?.name || conversation.contact_name || conversation.contact_phone;
-              const context = conversation.lead?.company_name || conversation.lead?.pipeline_stages?.name || null;
+              const displayName = conversation.contact_name || conversation.leads?.name || conversation.contact_phone;
               return (
                 <button
                   key={conversation.id}
                   className={"wa-conversation " + (conversation.id === selectedId ? "active" : "")}
                   onClick={() => setSelectedId(conversation.id)}
                 >
-                  {renderAvatar(conversation)}
+                  <Avatar name={displayName} url={conversation.contact_avatar_url} size="large" />
                   <span className="wa-copy">
-                    <span className="wa-row-title">
+                    <span className="wa-contact-line">
                       <strong>{displayName}</strong>
-                      {conversation.lead && <em>Lead</em>}
+                      <time>{fmtListTime(conversation.last_message_at)}</time>
                     </span>
-                    <small>{context ? context + " · " : ""}{conversation.last_message_preview || "Sem mensagem"}</small>
-                  </span>
-                  <span className="wa-meta">
-                    <small>{fmt(conversation.last_message_at)}</small>
-                    {conversation.unread_count > 0 && <b>{conversation.unread_count}</b>}
+                    <span className="wa-preview-line">
+                      <small>{previewIcon(conversation)}</small>
+                      {conversation.unread_count > 0 && <b>{conversation.unread_count}</b>}
+                    </span>
+                    {conversation.lead_id && (
+                      <span className="wa-lead-context">
+                        Lead{conversation.leads?.company_name ? " · " + conversation.leads.company_name : ""}
+                      </span>
+                    )}
                   </span>
                 </button>
               );
             })
           ) : (
-            <p className="wa-empty">Nenhuma conversa encontrada.</p>
+            <div className="wa-empty">
+              <span>💬</span>
+              <strong>Nenhuma conversa</strong>
+              <p>As mensagens recebidas aparecerão aqui.</p>
+            </div>
           )}
         </div>
-      </div>
+      </aside>
 
       <div className="wa-chat">
         {selected ? (
           <>
-            <div className="wa-chat-head">
-              <button type="button" className="wa-back" onClick={() => setSelectedId(null)} aria-label="Voltar para conversas">
-                ‹
-              </button>
-              {renderAvatar(selected, "wa-avatar-chat")}
+            <header className="wa-chat-head">
+              <button type="button" className="wa-back" onClick={() => setSelectedId(null)} aria-label="Voltar para conversas">‹</button>
+              <Avatar name={selected.contact_name || selected.contact_phone} url={selected.contact_avatar_url} />
               <div className="wa-chat-contact">
-                <strong>{selectedLead?.name || selected.contact_name || selected.contact_phone}</strong>
-                <small>
-                  {selectedLead?.company_name
-                    ? selectedLead.company_name + (selectedLead.pipeline_stages?.name ? " · " + selectedLead.pipeline_stages.name : "")
-                    : selected.contact_phone}
-                </small>
+                <strong>{selected.contact_name || selected.leads?.name || selected.contact_phone}</strong>
+                <small>{selected.leads?.company_name || selected.contact_phone}</small>
               </div>
-              {selectedLead && onOpenLead && (
-                <button type="button" className="wa-open-lead" onClick={() => onOpenLead(selectedLead.id)}>
-                  Ver lead
-                </button>
-              )}
-            </div>
+              <span className="wa-chat-actions">⋮</span>
+            </header>
 
             <div className="wa-messages">
-              <div className="wa-encryption-note">🔒 Atendimento protegido no Wuniflow CRM</div>
+              <div className="wa-day-divider"><span>HOJE</span></div>
               {messages.map((message) => (
                 <article key={message.id} className={"wa-bubble " + message.direction}>
-                  {message.media_url && mediaUrls[message.media_url] && message.message_type === "image" && (
-                    <img className="wa-media-image" src={mediaUrls[message.media_url]} alt={message.body || "Imagem"} />
-                  )}
-                  {message.media_url && mediaUrls[message.media_url] && message.message_type === "audio" && (
-                    <audio className="wa-media-audio" controls src={mediaUrls[message.media_url]} />
-                  )}
-                  {message.media_url && mediaUrls[message.media_url] && message.message_type === "video" && (
-                    <video className="wa-media-video" controls src={mediaUrls[message.media_url]} />
-                  )}
-                  {message.media_url && mediaUrls[message.media_url] && message.message_type === "document" && (
-                    <a className="wa-media-link" href={mediaUrls[message.media_url]} target="_blank" rel="noreferrer">
-                      📄 {message.media_filename || "Abrir documento"}
-                    </a>
-                  )}
-                  {(message.body || !message.media_url) && (
-                    <p>{message.body || message.media_filename || messageFallback[message.message_type] || "[" + message.message_type + "]"}</p>
-                  )}
-                  <small>
-                    {fmt(message.created_at)}
-                    {message.direction === "outbound" && (
-                      <span className={"wa-message-status " + message.status}> {messageState(message)}</span>
-                    )}
-                  </small>
+                  {renderMessageContent(message)}
                 </article>
               ))}
               <div ref={messagesEndRef} />
@@ -584,6 +531,7 @@ export default function WhatsAppInbox({
                   <small>Toque em ■ para finalizar</small>
                 </div>
               )}
+
               {attachment && (
                 <div className="wa-attachment">
                   <span>{attachment.type.startsWith("audio/") ? "🎙️" : "📎"} {attachment.name}</span>
@@ -595,12 +543,12 @@ export default function WhatsAppInbox({
                       if (fileInputRef.current) fileInputRef.current.value = "";
                     }}
                   >
-                    Remover
+                    ×
                   </button>
                 </div>
               )}
-              {recordingError && <p className="wa-send-error">{recordingError}</p>}
-              {sendError && <p className="wa-send-error">{sendError}</p>}
+
+              {(recordingError || sendError) && <p className="wa-send-error">{recordingError || sendError}</p>}
 
               <div className="wa-compose">
                 <input
@@ -613,16 +561,11 @@ export default function WhatsAppInbox({
                     setRecordingError(null);
                   }}
                 />
-                <button
-                  type="button"
-                  className="wa-attach"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={sending || recording}
-                  title="Anexar arquivo"
-                >
-                  ＋
-                </button>
-                <div className="wa-input-shell">
+
+                <button type="button" className="wa-attach" onClick={() => fileInputRef.current?.click()} disabled={sending || recording} title="Anexar arquivo">＋</button>
+
+                <div className="wa-message-field">
+                  <span className="wa-emoji">☺</span>
                   <input
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
@@ -636,14 +579,9 @@ export default function WhatsAppInbox({
                     placeholder={recording ? "Gravando áudio…" : "Mensagem"}
                   />
                 </div>
+
                 {draft.trim() || attachment ? (
-                  <button
-                    type="button"
-                    className="wa-send"
-                    onClick={() => void sendMessage()}
-                    disabled={sending || recording}
-                    title="Enviar"
-                  >
+                  <button type="button" className="wa-send" onClick={() => void sendMessage()} disabled={sending || recording} title="Enviar">
                     {sending ? "…" : "➤"}
                   </button>
                 ) : (
@@ -662,9 +600,10 @@ export default function WhatsAppInbox({
           </>
         ) : (
           <div className="wa-chat-empty">
-            <div className="wa-empty-mark">W</div>
-            <strong>Wuniflow WhatsApp</strong>
-            <p>Selecione uma conversa para iniciar o atendimento.</p>
+            <div className="wa-empty-phone">W</div>
+            <strong>WhatsApp Wuniflow</strong>
+            <p>Selecione uma conversa para começar.</p>
+            <small>Mensagens protegidas pelo acesso do CRM.</small>
           </div>
         )}
       </div>
