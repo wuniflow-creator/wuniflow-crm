@@ -743,3 +743,126 @@
   }
   .wa-emoji-picker button{width:100%}
 }
+
+
+/* WhatsApp Inbox v3 — filters, lead context and media polish */
+.wa-filters{
+  display:flex;
+  gap:7px;
+  padding:0 12px 10px;
+  overflow-x:auto;
+  scrollbar-width:none;
+  background:#111418;
+}
+.wa-filters::-webkit-scrollbar{display:none}
+.wa-filters button{
+  flex:0 0 auto;
+  min-height:30px;
+  padding:5px 11px;
+  border:1px solid #30343a;
+  border-radius:16px;
+  background:#20242a;
+  color:#aeb4bb;
+  box-shadow:none;
+  font-size:10px;
+  font-weight:600;
+}
+.wa-filters button:hover{filter:none;background:#282c33}
+.wa-filters button.active{
+  border-color:#6e2f77;
+  background:#412047;
+  color:#f1d7f4;
+}
+.wa-lead-action{
+  flex:0 0 auto;
+  min-height:34px;
+  padding:7px 10px;
+  border:1px solid #4a3450;
+  border-radius:9px;
+  background:#2c1c31;
+  color:#efc9f4;
+  box-shadow:none;
+  font-size:9px;
+  font-weight:700;
+  white-space:nowrap;
+}
+.wa-lead-action:hover{background:#39213f;filter:none}
+.wa-media-open{
+  display:block;
+  margin:0;
+  padding:0;
+  border-radius:7px;
+  overflow:hidden;
+  text-decoration:none;
+}
+.wa-media-image.sticker{
+  width:min(210px,55vw);
+  max-height:210px;
+  object-fit:contain;
+  background:transparent;
+}
+.wa-bubble:has(.wa-media-image),
+.wa-bubble:has(.wa-media-video){
+  padding-top:5px;
+}
+.wa-bubble.inbound::before,
+.wa-bubble.outbound::before{
+  content:"";
+  position:absolute;
+  top:0;
+  width:0;
+  height:0;
+  border-style:solid;
+}
+.wa-bubble.inbound::before{
+  left:-6px;
+  border-width:0 7px 7px 0;
+  border-color:transparent #20242a transparent transparent;
+}
+.wa-bubble.outbound::before{
+  right:-6px;
+  border-width:0 0 7px 7px;
+  border-color:transparent transparent transparent #3a1d3e;
+}
+.wa-message-status.failed{
+  color:#ff7f8c;
+}
+.wa-conversation .wa-lead-context{
+  max-width:100%;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.wa-empty{
+  min-height:180px;
+  display:grid;
+  place-items:center;
+  align-content:center;
+  gap:6px;
+  padding:24px;
+  color:#8e949c;
+  text-align:center;
+}
+.wa-empty>span{font-size:26px}
+.wa-empty strong{color:#dfe2e5;font-size:12px}
+.wa-empty p{margin:0;font-size:10px}
+@media(max-width:900px){
+  .wa-filters{
+    padding-left:12px;
+    padding-right:12px;
+  }
+  .wa-lead-action{
+    min-height:32px;
+    padding:6px 8px;
+    font-size:8px;
+  }
+  .wa-day-divider{
+    position:sticky;
+    top:0;
+    z-index:3;
+    margin-top:2px;
+  }
+  .wa-bubble{
+    max-width:88%;
+  }
+}
