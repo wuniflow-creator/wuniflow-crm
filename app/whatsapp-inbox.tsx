@@ -22,7 +22,8 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
  const [search,setSearch]=useState("");
  const [draft,setDraft]=useState("");
  const [sending,setSending]=useState(false);
- const [sendError,setSendError]=useState<string|null>(null);\n const [mediaUrls,setMediaUrls]=useState<Record<string,string>>({});
+ const [sendError,setSendError]=useState<string|null>(null);
+ const [mediaUrls,setMediaUrls]=useState<Record<string,string>>({});
  const messagesEndRef=useRef<HTMLDivElement|null>(null);
 
  const loadConversations=useCallback(async()=>{
@@ -34,7 +35,9 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
  const loadMessages=useCallback(async(id:string)=>{
   if(!supabase)return;
   const {data}=await supabase.from("whatsapp_messages").select("id,conversation_id,direction,message_type,body,media_url,media_mime_type,media_filename,status,created_at,delivered_at,read_at").eq("organization_id",organizationId).eq("conversation_id",id).order("created_at",{ascending:true}).limit(300);
-  const rows=(data||[]) as Message[]; setMessages(rows);\n  const paths=rows.filter(m=>m.media_url).map(m=>m.media_url!) ;\n  if(paths.length){const {data:signed}=await supabase.storage.from("whatsapp-media").createSignedUrls(paths,3600);const next:Record<string,string>={};signed?.forEach((x,i)=>{if(x.signedUrl)next[paths[i]]=x.signedUrl});setMediaUrls(next)}else setMediaUrls({});
+  const rows=(data||[]) as Message[]; setMessages(rows);
+  const paths=rows.filter(m=>m.media_url).map(m=>m.media_url!) ;
+  if(paths.length){const {data:signed}=await supabase.storage.from("whatsapp-media").createSignedUrls(paths,3600);const next:Record<string,string>={};signed?.forEach((x,i)=>{if(x.signedUrl)next[paths[i]]=x.signedUrl});setMediaUrls(next)}else setMediaUrls({});
  },[organizationId]);
 
  useEffect(()=>{void loadConversations()},[loadConversations]);
