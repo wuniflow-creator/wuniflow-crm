@@ -9,3 +9,4 @@
 .wa-message-status{font-weight:600}.wa-message-status.read{font-weight:700}.wa-message-status.failed{font-weight:700}
 
 .wa-media-image,.wa-media-video{display:block;max-width:min(320px,100%);max-height:360px;border-radius:12px;margin:8px 0;object-fit:cover}.wa-media-audio{display:block;max-width:100%;margin:8px 0}.wa-media-link{display:inline-block;margin:8px 0;text-decoration:underline;font-weight:600}
+\n.wa-file-input{display:none}.wa-attach{flex:0 0 42px;padding:9px;background:#25252d;border:1px solid #3b3b46;font-size:18px}.wa-attachment{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 13px 10px;padding:9px 11px;border:1px solid #34343f;border-radius:9px;background:#18181f;color:#d8d7e0;font-size:11px}.wa-attachment span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.wa-attachment button{padding:5px 8px;background:#302433;color:#f2cfee;font-size:10px}.wa-compose input:not(.wa-file-input){color:#fff}\n
