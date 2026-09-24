@@ -652,3 +652,26 @@
 @media(min-width:901px){
   .wa-conversation.active{box-shadow:inset 3px 0 #df00ff}
 }
+
+
+/* Mobile navigation conflict fix: v2 uses .chat-open, older rules used transforms. */
+@media(max-width:900px){
+  .whatsapp-mode .wa-shell:not(.chat-open)>.wa-list{
+    display:flex;
+    transform:none!important;
+    pointer-events:auto;
+  }
+  .whatsapp-mode .wa-shell:not(.chat-open)>.wa-chat{
+    display:none;
+    transform:none!important;
+  }
+  .whatsapp-mode .wa-shell.chat-open>.wa-list{
+    display:none;
+    transform:none!important;
+  }
+  .whatsapp-mode .wa-shell.chat-open>.wa-chat{
+    display:flex;
+    transform:none!important;
+    pointer-events:auto;
+  }
+}
