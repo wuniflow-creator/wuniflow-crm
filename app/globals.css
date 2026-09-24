@@ -20,3 +20,98 @@
 .wa-recording-status small{margin-left:auto;color:#bbaeb1}
 @keyframes waPulse{0%,100%{opacity:1}50%{opacity:.65}}
 @media(max-width:800px){.wa-recording-status{align-items:flex-start;flex-wrap:wrap}.wa-recording-status small{width:100%;margin-left:0}}
+
+
+/* WhatsApp workspace — responsive desktop/mobile shell */
+.content.whatsapp-page{max-width:none;height:100vh;padding:24px;overflow:hidden}
+.whatsapp-outer-header{display:none!important}
+.wa-shell{grid-template-columns:380px minmax(0,1fr);height:calc(100dvh - 48px);min-height:0;border-radius:16px;background:#0b0b0f;box-shadow:0 20px 60px #0005}
+.wa-list{background:#111116;border-right:1px solid #2a2a31}
+.wa-list-toolbar{min-height:70px;display:flex;align-items:center;gap:12px;padding:12px 14px;background:#17171d;border-bottom:1px solid #292930}
+.wa-list-toolbar>div{min-width:0;flex:1}
+.wa-list-toolbar strong{display:block;font:600 17px "Space Grotesk"}
+.wa-list-toolbar small{display:block;margin-top:3px;color:#9695a1;font-size:10px}
+.wa-global-menu,.wa-refresh,.wa-back,.wa-open-lead{background:#24242c;color:#ecebf1;border:1px solid #35353e;box-shadow:none}
+.wa-global-menu{display:none;width:40px;height:40px;padding:0;border-radius:50%;font-size:18px}
+.wa-refresh{width:38px;height:38px;padding:0;border-radius:50%;font-size:20px}
+.wa-search{position:relative;padding:9px 12px;background:#111116}
+.wa-search span{position:absolute;left:25px;top:50%;transform:translateY(-50%);color:#85848e;font-size:18px;pointer-events:none}
+.wa-search input{height:42px;padding:0 14px 0 38px;border:0;border-radius:10px;background:#202027;color:#f4f3f6}
+.wa-search input::placeholder{color:#96959e}
+.wa-conversations{background:#111116}
+.wa-conversation{grid-template-columns:50px minmax(0,1fr) auto;gap:12px;min-height:72px;padding:10px 12px;border-top:0;border-bottom:1px solid #25252c}
+.wa-conversation.active{background:#27232b}
+.wa-conversation:hover{background:#211f25}
+.wa-avatar{width:50px;height:50px;display:grid;place-items:center;overflow:hidden;flex:0 0 50px;border-radius:50%;background:linear-gradient(145deg,#51325a,#2c2031);color:#f4daf7;font-size:16px;font-weight:700}
+.wa-avatar img{width:100%;height:100%;display:block;object-fit:cover}
+.wa-avatar-chat{width:42px;height:42px;flex-basis:42px}
+.wa-row-title{display:flex;align-items:center;gap:7px;min-width:0}
+.wa-row-title strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wa-row-title em{flex:0 0 auto;padding:2px 5px;border-radius:5px;background:#2d4738;color:#9ee6bc;font-size:8px;font-style:normal;text-transform:uppercase;letter-spacing:.05em}
+.wa-copy small{font-size:11px;line-height:1.35;color:#9b9aa4}
+.wa-meta small{font-size:9px}
+.wa-chat{background:#0b0b0f;min-height:0}
+.wa-chat-head{min-height:70px;padding:10px 15px;background:#17171d;border-bottom:1px solid #292930}
+.wa-back{display:none;width:36px;height:36px;padding:0;border-radius:50%;font-size:30px;line-height:1}
+.wa-chat-contact{min-width:0;flex:1}
+.wa-chat-contact strong,.wa-chat-contact small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wa-chat-contact strong{font-size:14px}
+.wa-chat-contact small{margin-top:3px;color:#aaa8b2;font-size:10px}
+.wa-open-lead{padding:8px 10px;border-radius:8px;font-size:10px;white-space:nowrap}
+.wa-messages{padding:20px 6%;gap:6px;background:
+ radial-gradient(circle at 20% 15%,rgba(223,0,255,.045),transparent 28%),
+ radial-gradient(circle at 80% 75%,rgba(39,209,127,.035),transparent 24%),
+ #0b0b0f}
+.wa-encryption-note{align-self:center;margin:0 auto 12px;padding:6px 10px;border-radius:7px;background:#242126;color:#aaa5af;font-size:9px;text-align:center}
+.wa-bubble{position:relative;max-width:min(68%,620px);padding:8px 10px 6px;border:0;border-radius:9px;box-shadow:0 1px 1px #0005}
+.wa-bubble.inbound{background:#202027}
+.wa-bubble.outbound{background:#401846}
+.wa-bubble p{font-size:13px;line-height:1.42}
+.wa-bubble small{margin-top:4px;color:#a7a4ad;font-size:9px}
+.wa-message-status.read{color:#68c7ff}
+.wa-media-image,.wa-media-video{max-width:min(360px,100%);max-height:420px;margin:0 0 7px;border-radius:8px}
+.wa-media-audio{width:min(320px,70vw);margin:2px 0}
+.wa-media-link{color:#f6d8fa;text-decoration:none}
+.wa-compose-wrap{border-top:1px solid #292930;background:#17171d}
+.wa-compose{align-items:center;gap:8px;padding:10px 12px;background:#17171d;border:0}
+.wa-input-shell{display:flex;align-items:center;flex:1;min-width:0;height:44px;border-radius:22px;background:#24242b;border:1px solid #33333c}
+.wa-input-shell input{width:100%;height:100%;padding:0 16px!important;border:0!important;border-radius:22px!important;background:transparent!important;color:#f5f4f7!important}
+.wa-attach,.wa-mic,.wa-send{width:44px;height:44px;flex:0 0 44px;display:grid;place-items:center;padding:0;border-radius:50%;border:0;box-shadow:none}
+.wa-attach{background:#25252d;font-size:25px;font-weight:400}
+.wa-mic{background:#3b1740;font-size:17px}
+.wa-send{background:linear-gradient(135deg,var(--pink),var(--pink2));font-size:18px}
+.wa-recording-status,.wa-attachment{margin:8px 12px 0}
+.wa-send-error{padding:8px 13px 0}
+.wa-chat-empty{display:grid;place-items:center;align-content:center;gap:10px;width:100%;height:100%;margin:0;color:#8f8e98;border-bottom:6px solid #b51ec7}
+.wa-chat-empty p{margin:0;font-size:12px}
+.wa-empty-mark{width:74px;height:74px;display:grid;place-items:center;border-radius:24px;background:linear-gradient(145deg,#df00ff,#7624a8);color:#fff;font:700 32px "Space Grotesk";box-shadow:0 18px 50px #df00ff22}
+
+@media(max-width:800px){
+ html,body{min-height:100%;overflow-x:hidden}
+ .content.whatsapp-page{width:100%;height:100dvh;padding:0;overflow:hidden}
+ .whatsapp-page .whatsapp-outer-header{display:none!important}
+ .wa-shell{position:relative;display:block;width:100%;height:100dvh;min-height:0;border:0;border-radius:0;box-shadow:none;overflow:hidden;background:#0b0b0f}
+ .wa-list,.wa-chat{position:absolute;inset:0;width:100%;height:100%;min-height:0;max-height:none;border:0;transition:transform .22s ease;will-change:transform}
+ .wa-list{transform:translateX(0);background:#111116}
+ .wa-chat{transform:translateX(100%);pointer-events:none;background:#0b0b0f}
+ .wa-shell.mobile-chat-open .wa-list{transform:translateX(-100%);pointer-events:none}
+ .wa-shell.mobile-chat-open .wa-chat{transform:translateX(0);pointer-events:auto}
+ .wa-global-menu{display:grid}
+ .wa-list-toolbar{padding-top:max(12px,env(safe-area-inset-top));min-height:66px}
+ .wa-list-toolbar strong{font-size:19px}
+ .wa-search{padding:8px 10px 10px}
+ .wa-search span{left:22px}
+ .wa-conversation{grid-template-columns:52px minmax(0,1fr) auto;min-height:76px;padding:10px 12px}
+ .wa-avatar{width:52px;height:52px;flex-basis:52px}
+ .wa-chat-head{padding-top:max(10px,env(safe-area-inset-top));min-height:64px}
+ .wa-back{display:grid;background:transparent;border:0;font-size:34px}
+ .wa-avatar-chat{width:40px;height:40px;flex-basis:40px}
+ .wa-open-lead{padding:7px 8px}
+ .wa-messages{padding:14px 10px 18px}
+ .wa-bubble{max-width:86%}
+ .wa-bubble p{font-size:14px}
+ .wa-compose{padding:8px 8px max(8px,env(safe-area-inset-bottom))}
+ .wa-attach,.wa-mic,.wa-send{width:42px;height:42px;flex-basis:42px}
+ .wa-input-shell{height:42px}
+ .wa-media-audio{width:min(300px,72vw)}
+}
