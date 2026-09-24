@@ -40,7 +40,30 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
   return()=>{void supabase?.removeChannel(ch)};
  },[organizationId,selectedId,loadConversations,loadMessages]);
 
- const sendMessage=async()=>{if(!supabase||!selectedId||!draft.trim()||sending)return;setSending(true);setSendError(null);const text=draft.trim();const {error}=await supabase.functions.invoke("whatsapp-send-message",{body:{conversation_id:selectedId,text}});if(error){setSendError("Não foi possível enviar. A integração de saída ainda precisa da credencial segura da Evolution.");setSending(false);return}setDraft("");await loadMessages(selectedId);await loadConversations();setSending(false)};
+ const sendMessage=async()=>{
+  if(!supabase||!selectedId||!draft.trim()||sending)return;
+  setSending(true); setSendError(null);
+  const messageText=draft.trim();
+  try{
+   const sessionResult=await supabase.auth.getSession();
+   const token=sessionResult.data.session?.access_token;
+   if(!token){setSendError("Sua sessão expirou. Entre novamente no CRM.");return}
+   const {data,error}=await supabase.functions.invoke("whatsapp-send-message",{
+    body:{conversation_id:selectedId,text:messageText},
+    headers:{Authorization:"Bearer "+token}
+   });
+   if(error||!data?.ok){
+    const code=data?.error||error?.message||"send_failed";
+    setSendError("Falha no envio: "+code);
+    return;
+   }
+   setDraft("");
+   await loadMessages(selectedId);
+   await loadConversations();
+  }catch(err){
+   setSendError("Falha no envio: "+(err instanceof Error?err.message:"erro inesperado"));
+  }finally{setSending(false)}
+ };
 
  const selected=conversations.find(x=>x.id===selectedId)||null;
  const filtered=useMemo(()=>{const q=search.trim().toLowerCase();return q?conversations.filter(x=>((x.contact_name||"")+" "+x.contact_phone+" "+(x.last_message_preview||"")).toLowerCase().includes(q)):conversations},[conversations,search]);
