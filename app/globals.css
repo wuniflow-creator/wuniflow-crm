@@ -675,3 +675,71 @@
     pointer-events:auto;
   }
 }
+
+
+/* Emoji picker */
+.wa-compose-wrap{position:relative}
+.wa-message-field .wa-emoji{
+  flex:0 0 30px;
+  width:30px;
+  height:30px;
+  display:grid;
+  place-items:center;
+  padding:0;
+  border:0;
+  border-radius:50%;
+  background:transparent;
+  color:#aeb4bb;
+  font-size:20px;
+  box-shadow:none;
+}
+.wa-message-field .wa-emoji:hover,
+.wa-message-field .wa-emoji.active{
+  background:#383b43;
+  color:#fff;
+  filter:none;
+}
+.wa-emoji-picker{
+  position:absolute;
+  z-index:40;
+  left:58px;
+  bottom:62px;
+  width:min(360px,calc(100vw - 84px));
+  max-height:250px;
+  overflow:auto;
+  display:grid;
+  grid-template-columns:repeat(8,1fr);
+  gap:4px;
+  padding:10px;
+  border:1px solid #383b43;
+  border-radius:14px;
+  background:#20232a;
+  box-shadow:0 18px 50px #0009;
+}
+.wa-emoji-picker button{
+  width:36px;
+  height:36px;
+  display:grid;
+  place-items:center;
+  padding:0;
+  border-radius:8px;
+  background:transparent;
+  color:#fff;
+  font-size:21px;
+  box-shadow:none;
+}
+.wa-emoji-picker button:hover{
+  background:#343840;
+  filter:none;
+}
+@media(max-width:600px){
+  .wa-emoji-picker{
+    left:8px;
+    right:8px;
+    bottom:60px;
+    width:auto;
+    grid-template-columns:repeat(6,1fr);
+    max-height:220px;
+  }
+  .wa-emoji-picker button{width:100%}
+}
