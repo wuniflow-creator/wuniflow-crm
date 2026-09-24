@@ -62,8 +62,19 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
    const sessionResult=await supabase.auth.getSession();
    const token=sessionResult.data.session?.access_token;
    if(!token){setSendError("Sua sessão expirou. Entre novamente no CRM.");return}
+   let mediaPayload:null|{type:string;path:string;mime_type:string;filename:string}=null;
+   if(attachment){
+    if(attachment.size>25*1024*1024){setSendError("O anexo deve ter no máximo 25 MB.");return}
+    const mime=attachment.type||"application/octet-stream";
+    const type=mime.startsWith("image/")?"image":mime.startsWith("video/")?"video":mime.startsWith("audio/")?"audio":"document";
+    const safeName=attachment.name.replace(/[^a-zA-Z0-9._-]/g,"_").slice(-120)||"arquivo";
+    const path=organizationId+"/"+selectedId+"/outbound/"+crypto.randomUUID()+"-"+safeName;
+    const upload=await supabase.storage.from("whatsapp-media").upload(path,attachment,{contentType:mime,upsert:false});
+    if(upload.error){setSendError("Falha ao preparar anexo: "+upload.error.message);return}
+    mediaPayload={type,path,mime_type:mime,filename:safeName};
+   }
    const {data,error}=await supabase.functions.invoke("whatsapp-send-message",{
-    body:{conversation_id:selectedId,text:messageText},
+    body:{conversation_id:selectedId,text:messageText,media:mediaPayload},
     headers:{Authorization:"Bearer "+token}
    });
    if(error||!data?.ok){
@@ -71,7 +82,7 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
     setSendError("Falha no envio: "+code);
     return;
    }
-   setDraft("");
+   setDraft(""); setAttachment(null); if(fileInputRef.current)fileInputRef.current.value="";
    await loadMessages(selectedId);
    await loadConversations();
   }catch(err){
