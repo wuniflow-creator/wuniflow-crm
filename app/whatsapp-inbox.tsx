@@ -27,7 +27,7 @@ export default function WhatsAppInbox({organizationId}:{organizationId:string}) 
  },[organizationId]);
 
  useEffect(()=>{void loadConversations()},[loadConversations]);
- useEffect(()=>{if(selectedId)void loadMessages(selectedId);else setMessages([])},[selectedId,loadMessages]);
+ useEffect(()=>{if(selectedId){void loadMessages(selectedId);if(supabase){void supabase.rpc("mark_whatsapp_conversation_read",{p_conversation_id:selectedId}).then(()=>loadConversations())}}else setMessages([])},[selectedId,loadMessages,loadConversations]);
  useEffect(()=>{
   if(!supabase)return;
   const ch=supabase.channel("wa-inbox-"+organizationId)
