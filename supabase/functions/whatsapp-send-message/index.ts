@@ -118,21 +118,26 @@ Deno.serve(async (req: Request) => {
     const bytes = new Uint8Array(await file.arrayBuffer());
 
     if (messageType === "audio") {
-      // Evolution API 2.3.7 accepts multipart on sendWhatsAppAudio and its
-      // internal audio service requires req.file.buffer for this channel.
-      // Sending only JSON/base64 can reach the controller but fail later with
-      // "File or buffer is undefined".
-      endpoint = evolutionUrl + "/message/sendWhatsAppAudio/" + encodeURIComponent(channel.instance_name);
-      const form = new FormData();
-      const extension =
-        mediaMime === "audio/ogg" ? "ogg" :
-        mediaMime === "audio/mp4" ? "m4a" :
-        mediaMime === "audio/mpeg" ? "mp3" : "webm";
-      const filename = mediaFilename || ("audio-" + Date.now() + "." + extension);
-      form.append("number", phone);
-      form.append("encoding", "true");
-      form.append("file", new Blob([bytes], { type: mediaMime }), filename);
-      providerBody = form;
+      // Evolution API 2.3.7 has a broken/fragile sendWhatsAppAudio path for
+      // base64 and multipart in some installations. Its generic sendMedia
+      // controller accepts base64 and the Evolution channel handles
+      // mediaType=audio, so use that path for CRM recordings.
+      let binary = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+      }
+      const base64 = btoa(binary);
+      endpoint = evolutionUrl + "/message/sendMedia/" + encodeURIComponent(channel.instance_name);
+      providerHeaders["content-type"] = "application/json";
+      providerBody = JSON.stringify({
+        number: phone,
+        mediatype: "audio",
+        mimetype: mediaMime,
+        media: base64,
+        fileName: mediaFilename || "audio.webm",
+        filename: mediaFilename || "audio.webm",
+      });
     } else {
       let binary = "";
       const chunk = 0x8000;
@@ -171,8 +176,10 @@ Deno.serve(async (req: Request) => {
       headers: providerHeaders,
       body: providerBody,
     });
-  } catch {
-    return respond({ error: "evolution_unreachable" }, 502);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error("whatsapp-send-message evolution fetch failed", { messageType, reason });
+    return respond({ error: "evolution_unreachable", reason: reason.slice(0, 300) }, 502);
   }
 
   let provider: any = null;
