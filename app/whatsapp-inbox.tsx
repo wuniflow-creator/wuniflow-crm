@@ -34,6 +34,22 @@ type InternalNote = {
 };
 
 type ServiceStatus = "new" | "in_progress" | "waiting_customer" | "resolved";
+type ServicePriority = "low" | "normal" | "high" | "urgent";
+
+type InboxSettings = {
+  organization_id: string;
+  sla_low_minutes: number;
+  sla_normal_minutes: number;
+  sla_high_minutes: number;
+  sla_urgent_minutes: number;
+};
+
+const servicePriorityMeta: Record<ServicePriority, { label: string; short: string }> = {
+  low: { label: "Baixa", short: "Baixa" },
+  normal: { label: "Normal", short: "Normal" },
+  high: { label: "Alta", short: "Alta" },
+  urgent: { label: "Urgente", short: "Urgente" },
+};
 
 const serviceStatusMeta: Record<ServiceStatus, { label: string; short: string }> = {
   new: { label: "Novo", short: "Novo" },
@@ -58,6 +74,10 @@ type Conversation = {
   status: string;
   service_status: ServiceStatus;
   service_status_updated_at: string;
+  service_priority: ServicePriority;
+  last_inbound_at: string | null;
+  last_outbound_at: string | null;
+  awaiting_response_since: string | null;
 };
 type Message = {
   id: string;
@@ -151,6 +171,17 @@ const commonEmojis = [
   "👋","🙂","😢","😭","😡","🤯","💡","⭐"
 ];
 
+const formatWaitingTime = (milliseconds: number) => {
+  const minutes = Math.max(0, Math.floor(milliseconds / 60000));
+  if (minutes < 60) return minutes + " min";
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours < 24) return hours + "h" + (restMinutes ? " " + restMinutes + "min" : "");
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return days + "d" + (restHours ? " " + restHours + "h" : "");
+};
+
 const messageState = (m: Message) => {
   if (m.direction === "inbound") return "";
   if (m.status === "read" || m.read_at) return "✓✓";
@@ -184,9 +215,20 @@ export default function WhatsAppInbox({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [search, setSearch] = useState("");
-  const [conversationFilter, setConversationFilter] = useState<"all" | "mine" | "unread" | "leads" | "archived">("all");
+  const [conversationFilter, setConversationFilter] = useState<"all" | "mine" | "unread" | "leads" | "overdue" | "archived">("all");
   const [serviceStatusFilter, setServiceStatusFilter] = useState<"all" | ServiceStatus>("all");
   const [changingServiceStatus, setChangingServiceStatus] = useState(false);
+  const [changingPriority, setChangingPriority] = useState(false);
+  const [inboxSettings, setInboxSettings] = useState<InboxSettings | null>(null);
+  const [slaSettingsOpen, setSlaSettingsOpen] = useState(false);
+  const [slaSettingsSaving, setSlaSettingsSaving] = useState(false);
+  const [slaDraft, setSlaDraft] = useState({
+    low: 240,
+    normal: 120,
+    high: 60,
+    urgent: 30,
+  });
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [assigningConversation, setAssigningConversation] = useState(false);
@@ -237,11 +279,12 @@ export default function WhatsAppInbox({
       { data: memberData },
       { data: tagData },
       { data: conversationTagData },
+      { data: inboxSettingsData },
       userResult,
     ] = await Promise.all([
       supabase
         .from("whatsapp_conversations")
-        .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,assigned_to,last_message_at,last_message_preview,unread_count,status,service_status,service_status_updated_at")
+        .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,assigned_to,last_message_at,last_message_preview,unread_count,status,service_status,service_status_updated_at,service_priority,last_inbound_at,last_outbound_at,awaiting_response_since")
         .eq("organization_id", organizationId)
         .order("last_message_at", { ascending: false, nullsFirst: false }),
       supabase
@@ -273,6 +316,11 @@ export default function WhatsAppInbox({
         .select("conversation_id,tag_id")
         .eq("organization_id", organizationId)
         .limit(5000),
+      supabase
+        .from("whatsapp_inbox_settings")
+        .select("organization_id,sla_low_minutes,sla_normal_minutes,sla_high_minutes,sla_urgent_minutes")
+        .eq("organization_id", organizationId)
+        .maybeSingle(),
       supabase.auth.getUser(),
     ]);
 
@@ -282,6 +330,17 @@ export default function WhatsAppInbox({
     setAvailableLeads(leads);
     setActiveChannelId(channelData?.id || null);
     setCurrentUserId(userResult.data.user?.id || null);
+
+    if (inboxSettingsData) {
+      const settings = inboxSettingsData as InboxSettings;
+      setInboxSettings(settings);
+      setSlaDraft({
+        low: settings.sla_low_minutes,
+        normal: settings.sla_normal_minutes,
+        high: settings.sla_high_minutes,
+        urgent: settings.sla_urgent_minutes,
+      });
+    }
 
     const memberRows = (memberData || []) as { user_id: string; role: string }[];
     const memberIds = memberRows.map((member) => member.user_id);
@@ -414,6 +473,11 @@ export default function WhatsAppInbox({
   useEffect(() => {
     void loadConversations();
   }, [loadConversations]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const missing = conversations.filter((conversation) => !conversation.contact_avatar_url).slice(0, 5);
@@ -681,6 +745,39 @@ export default function WhatsAppInbox({
   };
 
   const selected = conversations.find((item) => item.id === selectedId) || null;
+  const currentMember = teamMembers.find((member) => member.user_id === currentUserId) || null;
+  const canManageSla = ["owner", "admin", "manager"].includes(currentMember?.role || "");
+
+  const getSlaLimitMinutes = useCallback((priority: ServicePriority) => {
+    if (!inboxSettings) {
+      return priority === "low" ? 240 : priority === "normal" ? 120 : priority === "high" ? 60 : 30;
+    }
+    if (priority === "low") return inboxSettings.sla_low_minutes;
+    if (priority === "high") return inboxSettings.sla_high_minutes;
+    if (priority === "urgent") return inboxSettings.sla_urgent_minutes;
+    return inboxSettings.sla_normal_minutes;
+  }, [inboxSettings]);
+
+  const getSlaState = useCallback((conversation: Conversation) => {
+    const active =
+      Boolean(conversation.awaiting_response_since) &&
+      conversation.status !== "archived" &&
+      conversation.service_status !== "waiting_customer" &&
+      conversation.service_status !== "resolved";
+
+    if (!active || !conversation.awaiting_response_since) {
+      return { active: false, overdue: false, elapsedMs: 0, limitMinutes: getSlaLimitMinutes(conversation.service_priority) };
+    }
+
+    const elapsedMs = Math.max(0, nowTick - new Date(conversation.awaiting_response_since).getTime());
+    const limitMinutes = getSlaLimitMinutes(conversation.service_priority);
+    return {
+      active: true,
+      overdue: elapsedMs >= limitMinutes * 60000,
+      elapsedMs,
+      limitMinutes,
+    };
+  }, [getSlaLimitMinutes, nowTick]);
 
   const startNewChat = (lead?: LeadSummary) => {
     setNewChatError(null);
@@ -926,6 +1023,78 @@ export default function WhatsAppInbox({
     setTagSaving(false);
   };
 
+  const updateServicePriority = async (nextPriority: ServicePriority) => {
+    if (!supabase || !selected || changingPriority || selected.service_priority === nextPriority) return;
+    setChangingPriority(true);
+    setSendError(null);
+
+    const { error } = await supabase
+      .from("whatsapp_conversations")
+      .update({
+        service_priority: nextPriority,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", selected.id)
+      .eq("organization_id", organizationId);
+
+    if (error) {
+      setSendError("Não foi possível alterar a prioridade do atendimento.");
+      setChangingPriority(false);
+      return;
+    }
+
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === selected.id
+          ? { ...conversation, service_priority: nextPriority }
+          : conversation,
+      ),
+    );
+
+    setChangingPriority(false);
+    await loadConversations();
+  };
+
+  const saveSlaSettings = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!supabase || !currentUserId || !canManageSla || slaSettingsSaving) return;
+
+    const values = [slaDraft.low, slaDraft.normal, slaDraft.high, slaDraft.urgent];
+    if (values.some((value) => !Number.isFinite(value) || value < 5 || value > 10080)) {
+      setSendError("Os tempos de SLA devem ficar entre 5 minutos e 7 dias.");
+      return;
+    }
+
+    setSlaSettingsSaving(true);
+    setSendError(null);
+
+    const payload = {
+      organization_id: organizationId,
+      sla_low_minutes: Math.round(slaDraft.low),
+      sla_normal_minutes: Math.round(slaDraft.normal),
+      sla_high_minutes: Math.round(slaDraft.high),
+      sla_urgent_minutes: Math.round(slaDraft.urgent),
+      created_by: currentUserId,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from("whatsapp_inbox_settings")
+      .upsert(payload, { onConflict: "organization_id" })
+      .select("organization_id,sla_low_minutes,sla_normal_minutes,sla_high_minutes,sla_urgent_minutes")
+      .single();
+
+    if (error || !data) {
+      setSendError("Não foi possível salvar as configurações de SLA.");
+      setSlaSettingsSaving(false);
+      return;
+    }
+
+    setInboxSettings(data as InboxSettings);
+    setSlaSettingsOpen(false);
+    setSlaSettingsSaving(false);
+  };
+
   const updateServiceStatus = async (nextStatus: ServiceStatus) => {
     if (!supabase || !selected || changingServiceStatus || selected.service_status === nextStatus) return;
     setChangingServiceStatus(true);
@@ -1006,6 +1175,7 @@ export default function WhatsAppInbox({
       }
       if (conversationFilter === "mine" && item.assigned_to !== currentUserId) return false;
       if (conversationFilter === "unread" && item.unread_count <= 0) return false;
+      if (conversationFilter === "overdue" && !getSlaState(item).overdue) return false;
       if (serviceStatusFilter !== "all" && item.service_status !== serviceStatusFilter) return false;
       if (conversationFilter === "leads" && !item.lead) return false;
       if (!query) return true;
@@ -1024,7 +1194,7 @@ export default function WhatsAppInbox({
         .toLowerCase()
         .includes(query);
     });
-  }, [conversations, search, conversationFilter, serviceStatusFilter, currentUserId]);
+  }, [conversations, search, conversationFilter, serviceStatusFilter, currentUserId, getSlaState]);
 
   const previewIcon = (conversation: Conversation) => {
     const preview = conversation.last_message_preview || "Sem mensagens";
@@ -1096,7 +1266,12 @@ export default function WhatsAppInbox({
             <h2>Conversas</h2>
             <small>{conversations.filter((item) => item.status !== "archived").reduce((count, item) => count + item.unread_count, 0)} não lidas</small>
           </div>
-          <button type="button" className="wa-new-chat-button" onClick={() => startNewChat()}>+ Nova</button>
+          <div className="wa-list-head-actions">
+            {canManageSla && (
+              <button type="button" className="wa-sla-settings-button" onClick={() => setSlaSettingsOpen(true)}>SLA</button>
+            )}
+            <button type="button" className="wa-new-chat-button" onClick={() => startNewChat()}>+ Nova</button>
+          </div>
         </div>
 
         <div className="wa-search">
@@ -1109,6 +1284,12 @@ export default function WhatsAppInbox({
           <button className={conversationFilter === "mine" ? "active" : ""} onClick={() => setConversationFilter("mine")}>Minhas</button>
           <button className={conversationFilter === "unread" ? "active" : ""} onClick={() => setConversationFilter("unread")}>Não lidas</button>
           <button className={conversationFilter === "leads" ? "active" : ""} onClick={() => setConversationFilter("leads")}>Leads</button>
+          <button className={conversationFilter === "overdue" ? "active" : ""} onClick={() => setConversationFilter("overdue")}>
+            Atrasadas
+            {conversations.filter((item) => item.status !== "archived" && getSlaState(item).overdue).length > 0 && (
+              <b>{conversations.filter((item) => item.status !== "archived" && getSlaState(item).overdue).length}</b>
+            )}
+          </button>
           <button className={conversationFilter === "archived" ? "active" : ""} onClick={() => setConversationFilter("archived")}>Arquivadas</button>
         </div>
 
@@ -1147,8 +1328,19 @@ export default function WhatsAppInbox({
                       <small>{previewIcon(conversation)}</small>
                       {conversation.unread_count > 0 && <b>{conversation.unread_count}</b>}
                     </span>
-                    <span className={"wa-service-pill " + conversation.service_status}>
-                      {serviceStatusMeta[conversation.service_status].short}
+                    <span className="wa-operational-line">
+                      <span className={"wa-service-pill " + conversation.service_status}>
+                        {serviceStatusMeta[conversation.service_status].short}
+                      </span>
+                      <span className={"wa-priority-pill " + conversation.service_priority}>
+                        {servicePriorityMeta[conversation.service_priority].short}
+                      </span>
+                      {getSlaState(conversation).active && (
+                        <span className={"wa-sla-pill " + (getSlaState(conversation).overdue ? "overdue" : "running")}>
+                          {getSlaState(conversation).overdue ? "SLA atrasado · " : "Aguardando · "}
+                          {formatWaitingTime(getSlaState(conversation).elapsedMs)}
+                        </span>
+                      )}
                     </span>
                     {conversation.tags.length > 0 && (
                       <span className="wa-list-tags">
@@ -1242,6 +1434,31 @@ export default function WhatsAppInbox({
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="wa-priority-bar">
+              <div>
+                <span>Prioridade</span>
+                <select
+                  value={selected.service_priority}
+                  onChange={(event) => void updateServicePriority(event.target.value as ServicePriority)}
+                  disabled={changingPriority}
+                  aria-label="Prioridade do atendimento"
+                >
+                  <option value="low">Baixa</option>
+                  <option value="normal">Normal</option>
+                  <option value="high">Alta</option>
+                  <option value="urgent">Urgente</option>
+                </select>
+              </div>
+              {getSlaState(selected).active ? (
+                <strong className={getSlaState(selected).overdue ? "overdue" : ""}>
+                  {getSlaState(selected).overdue ? "SLA atrasado" : "Aguardando resposta"} · {formatWaitingTime(getSlaState(selected).elapsedMs)}
+                  <small>Meta: {getSlaState(selected).limitMinutes} min</small>
+                </strong>
+              ) : (
+                <strong className="idle">Sem SLA correndo</strong>
+              )}
             </div>
 
             <div className="wa-assignment-bar">
@@ -1559,6 +1776,49 @@ export default function WhatsAppInbox({
           </div>
         )}
       </div>
+
+      {slaSettingsOpen && (
+        <div className="wa-new-chat-backdrop" onMouseDown={() => !slaSettingsSaving && setSlaSettingsOpen(false)}>
+          <section className="wa-new-chat-modal wa-sla-settings-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <strong>Configuração de SLA</strong>
+                <small>Tempo máximo para a equipe responder uma nova mensagem do cliente.</small>
+              </div>
+              <button type="button" onClick={() => setSlaSettingsOpen(false)} disabled={slaSettingsSaving} aria-label="Fechar">×</button>
+            </header>
+            <form onSubmit={saveSlaSettings}>
+              <div className="wa-sla-grid">
+                <label>
+                  Prioridade baixa
+                  <input type="number" min={5} max={10080} value={slaDraft.low} onChange={(event) => setSlaDraft((current) => ({ ...current, low: Number(event.target.value) }))} />
+                  <small>minutos</small>
+                </label>
+                <label>
+                  Prioridade normal
+                  <input type="number" min={5} max={10080} value={slaDraft.normal} onChange={(event) => setSlaDraft((current) => ({ ...current, normal: Number(event.target.value) }))} />
+                  <small>minutos</small>
+                </label>
+                <label>
+                  Prioridade alta
+                  <input type="number" min={5} max={10080} value={slaDraft.high} onChange={(event) => setSlaDraft((current) => ({ ...current, high: Number(event.target.value) }))} />
+                  <small>minutos</small>
+                </label>
+                <label>
+                  Prioridade urgente
+                  <input type="number" min={5} max={10080} value={slaDraft.urgent} onChange={(event) => setSlaDraft((current) => ({ ...current, urgent: Number(event.target.value) }))} />
+                  <small>minutos</small>
+                </label>
+              </div>
+              <p className="wa-sla-hint">O relógio para quando a Wuniflow responde ou quando o atendimento fica em “Aguardando cliente”/“Resolvido”.</p>
+              <footer>
+                <button type="button" className="secondary" onClick={() => setSlaSettingsOpen(false)} disabled={slaSettingsSaving}>Cancelar</button>
+                <button type="submit" disabled={slaSettingsSaving}>{slaSettingsSaving ? "Salvando…" : "Salvar SLA"}</button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      )}
 
       {newChatOpen && (
         <div className="wa-new-chat-backdrop" onMouseDown={() => !creatingChat && setNewChatOpen(false)}>
