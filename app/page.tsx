@@ -1,12 +1,12 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { DragEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import type { Lead, LeadActivity, Stage } from "@/lib/types";
 import WhatsAppInbox from "@/app/whatsapp-inbox";
 
 type SessionState = "loading" | "signed_out" | "ready" | "no_access";
-type View = "overview" | "leads" | "tasks" | "activities" | "whatsapp";
+type View = "overview" | "leads" | "kanban" | "tasks" | "activities" | "whatsapp";
 type ActivityFeedItem = LeadActivity & { lead_id: string; leads: Pick<Lead, "name" | "company_name"> | null };
 
 const formatDate = (value: string | null) =>
@@ -54,6 +54,8 @@ export default function Home() {
   const [isSavingLead, setIsSavingLead] = useState(false);
   const [activityNote, setActivityNote] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [draggedLeadId, setDraggedLeadId] = useState<string | null>(null);
+  const [movingLeadId, setMovingLeadId] = useState<string | null>(null);
 
   const loadCrm = async () => {
     if (!supabase) return;
@@ -117,6 +119,14 @@ export default function Home() {
   const taskLeads = useMemo(() => leads
     .filter((lead) => lead.next_action_title || lead.next_action_at)
     .sort((a, b) => new Date(a.next_action_at || "9999-12-31").getTime() - new Date(b.next_action_at || "9999-12-31").getTime()), [leads]);
+
+  const kanbanColumns = useMemo(
+    () => stages.map((stage) => ({
+      stage,
+      leads: filteredLeads.filter((lead) => lead.stage_id === stage.id),
+    })),
+    [stages, filteredLeads],
+  );
 
   const signIn = async (event: FormEvent) => {
     event.preventDefault();
@@ -202,6 +212,98 @@ export default function Home() {
     await loadCrm();
   };
 
+  const moveLeadStage = async (leadId: string, targetStageId: string) => {
+    if (!supabase || !organizationId || movingLeadId) return;
+
+    const lead = leads.find((item) => item.id === leadId);
+    const targetStage = stages.find((stage) => stage.id === targetStageId);
+    if (!lead || !targetStage || lead.stage_id === targetStageId) {
+      setDraggedLeadId(null);
+      return;
+    }
+
+    const previousStage = stages.find((stage) => stage.id === lead.stage_id);
+    const nextStatus: Lead["status"] =
+      targetStage.stage_type === "won" ? "won" :
+      targetStage.stage_type === "lost" ? "lost" : "open";
+    const movedAt = new Date().toISOString();
+
+    setMovingLeadId(leadId);
+    setLeadActionMessage("");
+    setLeads((current) =>
+      current.map((item) =>
+        item.id === leadId
+          ? {
+              ...item,
+              stage_id: targetStage.id,
+              status: nextStatus,
+              updated_at: movedAt,
+              pipeline_stages: { name: targetStage.name, color: targetStage.color },
+            }
+          : item,
+      ),
+    );
+    setSelectedLead((current) =>
+      current?.id === leadId
+        ? {
+            ...current,
+            stage_id: targetStage.id,
+            status: nextStatus,
+            updated_at: movedAt,
+            pipeline_stages: { name: targetStage.name, color: targetStage.color },
+          }
+        : current,
+    );
+
+    const { error } = await supabase
+      .from("leads")
+      .update({
+        stage_id: targetStage.id,
+        status: nextStatus,
+        updated_at: movedAt,
+      })
+      .eq("id", leadId)
+      .eq("organization_id", organizationId);
+
+    if (error) {
+      setLeadActionMessage("Não foi possível mover o lead. A posição anterior foi restaurada.");
+      await loadCrm();
+      setMovingLeadId(null);
+      setDraggedLeadId(null);
+      return;
+    }
+
+    const { data: userData } = await supabase.auth.getUser();
+    if (userData.user) {
+      await supabase.from("lead_activities").insert({
+        organization_id: organizationId,
+        lead_id: leadId,
+        activity_type: "status_change",
+        title: "Etapa do funil alterada",
+        description: (previousStage?.name || "Sem etapa") + " → " + targetStage.name,
+        occurred_at: movedAt,
+        created_by: userData.user.id,
+      });
+    }
+
+    setLeadActionMessage("Lead movido para " + targetStage.name + ".");
+    setMovingLeadId(null);
+    setDraggedLeadId(null);
+    await loadCrm();
+  };
+
+  const handleKanbanDragStart = (event: DragEvent<HTMLElement>, leadId: string) => {
+    setDraggedLeadId(leadId);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", leadId);
+  };
+
+  const handleKanbanDrop = (event: DragEvent<HTMLElement>, stageId: string) => {
+    event.preventDefault();
+    const leadId = event.dataTransfer.getData("text/plain") || draggedLeadId;
+    if (leadId) void moveLeadStage(leadId, stageId);
+  };
+
   const addActivity = async (event: FormEvent) => {
     event.preventDefault();
     if (!supabase || !organizationId || !selectedLead || !activityNote.trim()) return;
@@ -265,7 +367,7 @@ export default function Home() {
 
   const leadRows = filteredLeads.map((lead) => <tr key={lead.id}><td><strong>{lead.name}</strong><small>{lead.company_name || "Empresa não informada"} · {lead.source || "Origem não informada"}</small></td><td><span className="stage"><i style={{ background: lead.pipeline_stages?.color || "#94a3b8" }} />{lead.pipeline_stages?.name || "Sem etapa"}</span></td><td><span className={`priority ${lead.priority}`}>{lead.priority}</span></td><td><strong>{lead.next_action_title || "Revisar contexto e assumir contato"}</strong><small>{formatDate(lead.next_action_at || lead.last_contact_at)}</small></td><td className="actions"><button className="view-button" onClick={() => void openLead(lead)}>Ver contexto</button>{lead.whatsapp && <a className="whatsapp" href={toWhatsApp(lead.whatsapp)} target="_blank" rel="noreferrer">WhatsApp ↗</a>}</td></tr>);
 
-  return <main className={"shell "+(view==="whatsapp"?"whatsapp-mode":"")}><aside className={mobileMenuOpen ? "open" : ""}><div className="brand"><span className="mark">W</span><div><strong>WUNIFLOW</strong><small>AUTOMATIONS</small></div></div><nav><button className={view === "overview" ? "active" : ""} onClick={() => { setView("overview"); setMobileMenuOpen(false); }}>Visão geral</button><button className={view === "leads" ? "active" : ""} onClick={() => { setView("leads"); setMobileMenuOpen(false); }}>Leads</button><button className={view === "tasks" ? "active" : ""} onClick={() => { setView("tasks"); setMobileMenuOpen(false); }}>Tarefas</button><button className={view === "activities" ? "active" : ""} onClick={() => { setView("activities"); setMobileMenuOpen(false); }}>Atividades</button><button className={view === "whatsapp" ? "active" : ""} onClick={() => { setView("whatsapp"); setMobileMenuOpen(false); }}>WhatsApp</button></nav><div className="side-footer"><span>{role}</span><button className="text-button" onClick={signOut}>Sair</button></div></aside>{mobileMenuOpen && <button className="mobile-menu-backdrop" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}<section className={"content "+(view === "whatsapp" ? "whatsapp-page" : "")}><header className={view === "whatsapp" ? "whatsapp-outer-header" : ""}><button className="mobile-menu-button" aria-label="Abrir menu" onClick={() => setMobileMenuOpen(true)}><span /><span /><span /></button><div><p className="eyebrow">OPERAÇÃO COMERCIAL</p><h1>{view === "overview" ? "Visão geral" : view === "leads" ? "Leads" : view === "tasks" ? "Próximas ações" : view === "activities" ? "Atividades" : "WhatsApp"}</h1><p className="muted">{view === "overview" ? "Acompanhe leads, prioridades e próximos passos." : view === "leads" ? "Diagnósticos e conversas qualificadas em um só lugar." : view === "tasks" ? "Organize os retornos comerciais que precisam de atenção." : view === "activities" ? "Histórico recente da operação comercial." : "Conversas recebidas pelo WhatsApp da Wuniflow."}</p></div><button onClick={() => { setNewLeadConversationId(null); setIsNewLeadOpen(true); }}>+ Novo lead</button></header>{view === "overview" ? <><section className="stats"><article><span>Leads abertos</span><strong>{stats.open}</strong></article><article><span>Próximas ações</span><strong>{stats.next}</strong></article><article><span>Prioridade alta</span><strong>{stats.urgent}</strong></article><article><span>Ganhos</span><strong>{stats.won}</strong></article></section><section className="panel"><div className="panel-title"><div><h2>Leads recentes</h2><p>Diagnósticos recebidos e atendimentos em andamento.</p></div><span>{leads.length} registros</span></div>{leads.length === 0 ? <div className="empty"><h3>Ainda não há leads no CRM</h3><p>O próximo diagnóstico confirmado pela landing aparecerá aqui automaticamente.</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Próxima ação</th><th></th></tr></thead><tbody>{leadRows}</tbody></table></div>}</section></> : view === "leads" ? <section className="panel"><div className="panel-title lead-list-heading"><div><h2>Todos os leads</h2><p>Use a busca para localizar empresa, contato, etapa ou telefone.</p></div><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar lead…" /></div>{filteredLeads.length === 0 ? <div className="empty"><h3>Nenhum lead encontrado</h3><p>{leads.length ? "Tente outro termo de busca." : "Os novos diagnósticos serão listados aqui."}</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Última atualização</th><th></th></tr></thead><tbody>{leadRows}</tbody></table></div>}</section> : view === "tasks" ? <section className="panel"><div className="panel-title"><div><h2>Próximas ações</h2><p>Leads com retorno ou acompanhamento agendado.</p></div><span>{taskLeads.length} pendências</span></div>{taskLeads.length === 0 ? <div className="empty"><h3>Nenhuma ação pendente</h3><p>Defina a próxima ação dentro de um lead para ela aparecer aqui.</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Próxima ação</th><th>Quando</th><th></th></tr></thead><tbody>{taskLeads.map((lead) => <tr key={lead.id}><td><strong>{lead.name}</strong><small>{lead.company_name || "Empresa não informada"}</small></td><td><span className="stage"><i style={{ background: lead.pipeline_stages?.color || "#94a3b8" }} />{lead.pipeline_stages?.name || "Sem etapa"}</span></td><td><strong>{lead.next_action_title || "Revisar contexto e definir próximo passo"}</strong></td><td>{formatDate(lead.next_action_at)}</td><td className="actions"><button className="view-button" onClick={() => void openLead(lead)}>Abrir lead</button></td></tr>)}</tbody></table></div>}</section> : view === "activities" ? <section className="panel"><div className="panel-title"><div><h2>Atividades recentes</h2><p>Notas, handoffs e interações registradas no CRM.</p></div><span>{recentActivities.length} registros</span></div>{recentActivities.length === 0 ? <div className="empty"><h3>Ainda não há atividades</h3><p>As próximas notas e movimentações aparecerão aqui.</p></div> : <div className="activity-feed">{recentActivities.map((activity) => <article key={activity.id}><span>{activityLabel[activity.activity_type]}</span><div><strong>{activity.title}</strong><p>{activity.leads?.name || "Lead não localizado"}{activity.leads?.company_name ? " · " + activity.leads.company_name : ""}</p>{activity.description && <p>{activity.description}</p>}<small>{formatDate(activity.occurred_at)}</small></div><button className="view-button" onClick={() => { const lead = leads.find((item) => item.id === activity.lead_id); if (lead) void openLead(lead); }}>Abrir lead</button></article>)}</div>}</section> : organizationId ? <WhatsAppInbox
+  return <main className={"shell "+(view==="whatsapp"?"whatsapp-mode":"")}><aside className={mobileMenuOpen ? "open" : ""}><div className="brand"><span className="mark">W</span><div><strong>WUNIFLOW</strong><small>AUTOMATIONS</small></div></div><nav><button className={view === "overview" ? "active" : ""} onClick={() => { setView("overview"); setMobileMenuOpen(false); }}>Visão geral</button><button className={view === "leads" ? "active" : ""} onClick={() => { setView("leads"); setMobileMenuOpen(false); }}>Leads</button><button className={view === "kanban" ? "active" : ""} onClick={() => { setView("kanban"); setMobileMenuOpen(false); }}>Funil</button><button className={view === "tasks" ? "active" : ""} onClick={() => { setView("tasks"); setMobileMenuOpen(false); }}>Tarefas</button><button className={view === "activities" ? "active" : ""} onClick={() => { setView("activities"); setMobileMenuOpen(false); }}>Atividades</button><button className={view === "whatsapp" ? "active" : ""} onClick={() => { setView("whatsapp"); setMobileMenuOpen(false); }}>WhatsApp</button></nav><div className="side-footer"><span>{role}</span><button className="text-button" onClick={signOut}>Sair</button></div></aside>{mobileMenuOpen && <button className="mobile-menu-backdrop" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}<section className={"content "+(view === "whatsapp" ? "whatsapp-page" : "")}><header className={view === "whatsapp" ? "whatsapp-outer-header" : ""}><button className="mobile-menu-button" aria-label="Abrir menu" onClick={() => setMobileMenuOpen(true)}><span /><span /><span /></button><div><p className="eyebrow">OPERAÇÃO COMERCIAL</p><h1>{view === "overview" ? "Visão geral" : view === "leads" ? "Leads" : view === "kanban" ? "Funil comercial" : view === "tasks" ? "Próximas ações" : view === "activities" ? "Atividades" : "WhatsApp"}</h1><p className="muted">{view === "overview" ? "Acompanhe leads, prioridades e próximos passos." : view === "leads" ? "Diagnósticos e conversas qualificadas em um só lugar." : view === "kanban" ? "Movimente oportunidades pelas etapas do processo comercial." : view === "tasks" ? "Organize os retornos comerciais que precisam de atenção." : view === "activities" ? "Histórico recente da operação comercial." : "Conversas recebidas pelo WhatsApp da Wuniflow."}</p></div><button onClick={() => { setNewLeadConversationId(null); setIsNewLeadOpen(true); }}>+ Novo lead</button></header>{view === "overview" ? <><section className="stats"><article><span>Leads abertos</span><strong>{stats.open}</strong></article><article><span>Próximas ações</span><strong>{stats.next}</strong></article><article><span>Prioridade alta</span><strong>{stats.urgent}</strong></article><article><span>Ganhos</span><strong>{stats.won}</strong></article></section><section className="panel"><div className="panel-title"><div><h2>Leads recentes</h2><p>Diagnósticos recebidos e atendimentos em andamento.</p></div><span>{leads.length} registros</span></div>{leads.length === 0 ? <div className="empty"><h3>Ainda não há leads no CRM</h3><p>O próximo diagnóstico confirmado pela landing aparecerá aqui automaticamente.</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Próxima ação</th><th></th></tr></thead><tbody>{leadRows}</tbody></table></div>}</section></> : view === "leads" ? <section className="panel"><div className="panel-title lead-list-heading"><div><h2>Todos os leads</h2><p>Use a busca para localizar empresa, contato, etapa ou telefone.</p></div><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar lead…" /></div>{filteredLeads.length === 0 ? <div className="empty"><h3>Nenhum lead encontrado</h3><p>{leads.length ? "Tente outro termo de busca." : "Os novos diagnósticos serão listados aqui."}</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Última atualização</th><th></th></tr></thead><tbody>{leadRows}</tbody></table></div>}</section> : view === "kanban" ? <section className="kanban-section"><div className="kanban-toolbar"><div><h2>Pipeline comercial</h2><p>Arraste os cards entre as etapas. No celular, use o seletor do card.</p></div><div className="kanban-toolbar-actions"><span>{filteredLeads.length} oportunidades</span><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar no funil…" /></div></div>{leadActionMessage && <p className="kanban-feedback">{leadActionMessage}</p>}<div className="kanban-board">{kanbanColumns.map(({ stage, leads: stageLeads }) => <section key={stage.id} className={"kanban-column "+(stage.stage_type !== "open" ? "terminal" : "")} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => handleKanbanDrop(event, stage.id)}><header><div><i style={{ background: stage.color || "#94a3b8" }} /><strong>{stage.name}</strong></div><b>{stageLeads.length}</b></header><div className="kanban-cards">{stageLeads.length ? stageLeads.map((lead) => <article key={lead.id} className={"kanban-card "+(draggedLeadId === lead.id ? "dragging" : "")+(movingLeadId === lead.id ? " moving" : "")} draggable={movingLeadId !== lead.id} onDragStart={(event) => handleKanbanDragStart(event, lead.id)} onDragEnd={() => setDraggedLeadId(null)}><button type="button" className="kanban-card-main" onClick={() => void openLead(lead)}><span className="kanban-card-top"><strong>{lead.name}</strong><em className={"priority "+lead.priority}>{lead.priority}</em></span><small>{lead.company_name || lead.source || "Sem empresa informada"}</small><span className="kanban-next"><b>{lead.next_action_title || "Definir próxima ação"}</b><small>{formatDate(lead.next_action_at || lead.last_contact_at)}</small></span></button><div className="kanban-card-foot"><span>{lead.whatsapp || "Sem WhatsApp"}</span><label><span>Mover</span><select value={lead.stage_id} disabled={movingLeadId === lead.id} onChange={(event) => void moveLeadStage(lead.id, event.target.value)}>{stages.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label></div></article>) : <div className="kanban-empty">Solte um lead aqui</div>}</div></section>)}</div></section> : view === "tasks" ? <section className="panel"><div className="panel-title"><div><h2>Próximas ações</h2><p>Leads com retorno ou acompanhamento agendado.</p></div><span>{taskLeads.length} pendências</span></div>{taskLeads.length === 0 ? <div className="empty"><h3>Nenhuma ação pendente</h3><p>Defina a próxima ação dentro de um lead para ela aparecer aqui.</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Próxima ação</th><th>Quando</th><th></th></tr></thead><tbody>{taskLeads.map((lead) => <tr key={lead.id}><td><strong>{lead.name}</strong><small>{lead.company_name || "Empresa não informada"}</small></td><td><span className="stage"><i style={{ background: lead.pipeline_stages?.color || "#94a3b8" }} />{lead.pipeline_stages?.name || "Sem etapa"}</span></td><td><strong>{lead.next_action_title || "Revisar contexto e definir próximo passo"}</strong></td><td>{formatDate(lead.next_action_at)}</td><td className="actions"><button className="view-button" onClick={() => void openLead(lead)}>Abrir lead</button></td></tr>)}</tbody></table></div>}</section> : view === "activities" ? <section className="panel"><div className="panel-title"><div><h2>Atividades recentes</h2><p>Notas, handoffs e interações registradas no CRM.</p></div><span>{recentActivities.length} registros</span></div>{recentActivities.length === 0 ? <div className="empty"><h3>Ainda não há atividades</h3><p>As próximas notas e movimentações aparecerão aqui.</p></div> : <div className="activity-feed">{recentActivities.map((activity) => <article key={activity.id}><span>{activityLabel[activity.activity_type]}</span><div><strong>{activity.title}</strong><p>{activity.leads?.name || "Lead não localizado"}{activity.leads?.company_name ? " · " + activity.leads.company_name : ""}</p>{activity.description && <p>{activity.description}</p>}<small>{formatDate(activity.occurred_at)}</small></div><button className="view-button" onClick={() => { const lead = leads.find((item) => item.id === activity.lead_id); if (lead) void openLead(lead); }}>Abrir lead</button></article>)}</div>}</section> : organizationId ? <WhatsAppInbox
   organizationId={organizationId}
   onOpenMenu={()=>setMobileMenuOpen(true)}
   onOpenLead={(leadId)=>{const lead=leads.find((item)=>item.id===leadId);if(lead)void openLead(lead)}}
