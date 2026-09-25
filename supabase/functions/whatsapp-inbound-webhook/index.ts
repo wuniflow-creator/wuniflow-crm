@@ -17,6 +17,38 @@ function adminClient() {
   });
 }
 
+async function dispatchWebPush(input: {
+  secret: string;
+  organizationId: string;
+  conversationId: string;
+  contactName: string | null;
+  text: string | null;
+  messageType: string;
+}) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  if (!supabaseUrl) return;
+
+  try {
+    await fetch(supabaseUrl.replace(/\/$/, "") + "/functions/v1/web-push-dispatch", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-webhook-secret": input.secret,
+      },
+      body: JSON.stringify({
+        organization_id: input.organizationId,
+        conversation_id: input.conversationId,
+        contact_name: input.contactName,
+        text: input.text,
+        message_type: input.messageType,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    // Push delivery is best-effort and must never block WhatsApp ingestion.
+  }
+}
+
 function extract(payload: any) {
   const data = payload?.data ?? payload ?? {};
   const key = data?.key ?? {};
@@ -280,6 +312,17 @@ Deno.serve(async (req: Request) => {
         // Media enrichment is best-effort. The message itself remains stored.
       }
     }
+  }
+
+  if (inserted.data && direction === "inbound") {
+    await dispatchWebPush({
+      secret: configuredSecret,
+      organizationId: channel.organization_id,
+      conversationId: conversation.id,
+      contactName: parsed.pushName ?? parsed.phone,
+      text: parsed.text,
+      messageType: parsed.messageType,
+    });
   }
 
   return json({ ok: true, stored: Boolean(inserted.data) });
