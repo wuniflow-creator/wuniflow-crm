@@ -39,6 +39,23 @@ type InboxToast = {
   preview: string;
 };
 
+type InboxMetrics = {
+  period_days: number;
+  inbound_messages: number;
+  outbound_messages: number;
+  active_conversations: number;
+  inbound_media: number;
+  outbound_media: number;
+  avg_response_minutes: number | null;
+  answered_inbound: number;
+  new_count: number;
+  in_progress_count: number;
+  waiting_count: number;
+  resolved_count: number;
+  overdue_count: number;
+  daily: Array<{ date: string; inbound: number; outbound: number }>;
+};
+
 type InternalNote = {
   id: string;
   conversation_id: string;
@@ -288,6 +305,11 @@ export default function WhatsAppInbox({
   const [notificationEnabled, setNotificationEnabled] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<"default" | "granted" | "denied" | "unsupported">("default");
   const [inboxToast, setInboxToast] = useState<InboxToast | null>(null);
+  const [metricsOpen, setMetricsOpen] = useState(false);
+  const [metricsDays, setMetricsDays] = useState<7 | 30>(30);
+  const [metrics, setMetrics] = useState<InboxMetrics | null>(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -952,6 +974,7 @@ export default function WhatsAppInbox({
   const currentMember = teamMembers.find((member) => member.user_id === currentUserId) || null;
   const canManageSla = ["owner", "admin", "manager"].includes(currentMember?.role || "");
   const canManageQuickReplies = ["owner", "admin", "manager"].includes(currentMember?.role || "");
+  const canViewMetrics = ["owner", "admin", "manager"].includes(currentMember?.role || "");
 
   const messageSearchMatches = useMemo(() => {
     const query = messageSearch.trim().toLowerCase();
@@ -995,6 +1018,42 @@ export default function WhatsAppInbox({
       reply.title.toLowerCase().includes(slash.slice(1)),
     );
   }, [quickReplies, draft]);
+
+  const loadMetrics = useCallback(async (days: 7 | 30) => {
+    if (!supabase) return;
+    setMetricsLoading(true);
+    setMetricsError(null);
+
+    const { data, error } = await supabase.rpc("get_whatsapp_inbox_metrics", {
+      p_organization_id: organizationId,
+      p_days: days,
+    });
+
+    if (error || !data) {
+      setMetricsError("Não foi possível carregar as métricas do Inbox.");
+      setMetricsLoading(false);
+      return;
+    }
+
+    setMetrics(data as InboxMetrics);
+    setMetricsLoading(false);
+  }, [organizationId]);
+
+  const openMetrics = () => {
+    setMetricsOpen(true);
+    void loadMetrics(metricsDays);
+  };
+
+  const formatMetricMinutes = (value: number | null) => {
+    if (value === null || !Number.isFinite(value)) return "—";
+    if (value < 60) return Math.round(value) + " min";
+    const hours = Math.floor(value / 60);
+    const minutes = Math.round(value % 60);
+    if (hours < 24) return hours + "h" + (minutes ? " " + minutes + "min" : "");
+    const days = Math.floor(hours / 24);
+    const restHours = hours % 24;
+    return days + "d" + (restHours ? " " + restHours + "h" : "");
+  };
 
   const getSlaLimitMinutes = useCallback((priority: ServicePriority) => {
     if (!inboxSettings) {
@@ -1602,6 +1661,9 @@ export default function WhatsAppInbox({
             <i className={"wa-health-dot " + channelHealth} title={"Canal " + channelHealth} />
           </span>
           <span className="wa-mobile-top-actions">
+            {canViewMetrics && (
+              <button type="button" className="wa-mobile-metrics" onClick={openMetrics} aria-label="Métricas do Inbox" title="Métricas do Inbox">▦</button>
+            )}
             {canManageSla && (
               <button type="button" className="wa-mobile-sla" onClick={() => setSlaSettingsOpen(true)} aria-label="Configurar SLA" title="Configurar SLA">⏱</button>
             )}
@@ -1632,6 +1694,9 @@ export default function WhatsAppInbox({
             </button>
           </div>
           <div className="wa-list-head-actions">
+            {canViewMetrics && (
+              <button type="button" className="wa-metrics-button" onClick={openMetrics}>Métricas</button>
+            )}
             <button
               type="button"
               className={"wa-notification-toggle " + (notificationEnabled ? "active" : "")}
@@ -2291,6 +2356,91 @@ export default function WhatsAppInbox({
           </div>
         )}
       </div>
+
+      {metricsOpen && (
+        <div className="wa-new-chat-backdrop" onMouseDown={() => !metricsLoading && setMetricsOpen(false)}>
+          <section className="wa-new-chat-modal wa-metrics-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <strong>Métricas do WhatsApp Inbox</strong>
+                <small>Visão operacional do atendimento da organização.</small>
+              </div>
+              <button type="button" onClick={() => setMetricsOpen(false)} aria-label="Fechar métricas">×</button>
+            </header>
+
+            <div className="wa-metrics-toolbar">
+              <div>
+                <button
+                  type="button"
+                  className={metricsDays === 7 ? "active" : ""}
+                  onClick={() => { setMetricsDays(7); void loadMetrics(7); }}
+                >
+                  7 dias
+                </button>
+                <button
+                  type="button"
+                  className={metricsDays === 30 ? "active" : ""}
+                  onClick={() => { setMetricsDays(30); void loadMetrics(30); }}
+                >
+                  30 dias
+                </button>
+              </div>
+              <button type="button" onClick={() => void loadMetrics(metricsDays)} disabled={metricsLoading}>Atualizar</button>
+            </div>
+
+            {metricsLoading && !metrics ? (
+              <div className="wa-metrics-loading">Carregando métricas…</div>
+            ) : metricsError ? (
+              <div className="wa-metrics-error">{metricsError}</div>
+            ) : metrics ? (
+              <div className="wa-metrics-content">
+                <div className="wa-metrics-cards">
+                  <article><span>Recebidas</span><strong>{metrics.inbound_messages}</strong><small>mensagens no período</small></article>
+                  <article><span>Enviadas</span><strong>{metrics.outbound_messages}</strong><small>mensagens no período</small></article>
+                  <article><span>Conversas</span><strong>{metrics.active_conversations}</strong><small>movimentadas no período</small></article>
+                  <article><span>Resposta média</span><strong>{formatMetricMinutes(metrics.avg_response_minutes)}</strong><small>{metrics.answered_inbound} mensagens respondidas</small></article>
+                </div>
+
+                <div className="wa-metrics-queue">
+                  <article><strong>{metrics.new_count}</strong><span>Novos</span></article>
+                  <article><strong>{metrics.in_progress_count}</strong><span>Em atendimento</span></article>
+                  <article><strong>{metrics.waiting_count}</strong><span>Aguardando cliente</span></article>
+                  <article className={metrics.overdue_count ? "alert" : ""}><strong>{metrics.overdue_count}</strong><span>SLA atrasado</span></article>
+                  <article><strong>{metrics.resolved_count}</strong><span>Resolvidos</span></article>
+                </div>
+
+                <section className="wa-metrics-volume">
+                  <header>
+                    <div>
+                      <strong>Volume diário</strong>
+                      <small>Recebidas e enviadas por dia.</small>
+                    </div>
+                    <span>{metrics.inbound_media + metrics.outbound_media} mídias no período</span>
+                  </header>
+                  <div>
+                    {metrics.daily.slice(-14).map((day) => {
+                      const max = Math.max(1, ...metrics.daily.map((item) => item.inbound + item.outbound));
+                      const inboundWidth = Math.max(2, Math.round((day.inbound / max) * 100));
+                      const outboundWidth = Math.max(2, Math.round((day.outbound / max) * 100));
+                      return (
+                        <article key={day.date}>
+                          <time>{new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(new Date(day.date + "T12:00:00"))}</time>
+                          <span className="wa-metric-bars">
+                            <i className="inbound" style={{ width: inboundWidth + "%" }} title={day.inbound + " recebidas"} />
+                            <i className="outbound" style={{ width: outboundWidth + "%" }} title={day.outbound + " enviadas"} />
+                          </span>
+                          <small>{day.inbound} / {day.outbound}</small>
+                        </article>
+                      );
+                    })}
+                  </div>
+                  <footer><span>Recebidas / Enviadas</span></footer>
+                </section>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      )}
 
       {slaSettingsOpen && (
         <div className="wa-new-chat-backdrop" onMouseDown={() => !slaSettingsSaving && setSlaSettingsOpen(false)}>
