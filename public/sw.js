@@ -87,7 +87,7 @@ self.addEventListener("notificationclick", (event) => {
     try {
       const cache = await caches.open(NAV_CACHE_NAME);
       await cache.put(
-        PENDING_NAV_KEY,
+        new Request(new URL(PENDING_NAV_KEY, self.location.origin).href),
         new Response(
           JSON.stringify({
             type: conversationId ? "OPEN_WHATSAPP_CONVERSATION" : "OPEN_WHATSAPP",
