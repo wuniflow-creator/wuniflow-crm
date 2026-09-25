@@ -1,8 +1,9 @@
 const CACHE_NAME = "wuniflow-pwa-v1";
 const STATIC_ASSETS = [
   "/manifest.webmanifest",
+  "/pwa-icon/192",
+  "/pwa-icon/512",
   "/wuniflow-icon.svg",
-  "/wuniflow-icon-maskable.svg",
 ];
 
 self.addEventListener("install", (event) => {
@@ -54,8 +55,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(title, {
       body,
-      icon: "/wuniflow-icon.svg",
-      badge: "/wuniflow-icon.svg",
+      icon: "/pwa-icon/192",
+      badge: "/pwa-icon/192",
       tag: payload.tag || (conversationId ? "wuniflow-wa-" + conversationId : "wuniflow-crm"),
       renotify: true,
       data: { url, conversationId },
