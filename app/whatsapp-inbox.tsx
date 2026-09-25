@@ -33,6 +33,15 @@ type InternalNote = {
   updated_at: string;
 };
 
+type ServiceStatus = "new" | "in_progress" | "waiting_customer" | "resolved";
+
+const serviceStatusMeta: Record<ServiceStatus, { label: string; short: string }> = {
+  new: { label: "Novo", short: "Novo" },
+  in_progress: { label: "Em atendimento", short: "Atendimento" },
+  waiting_customer: { label: "Aguardando cliente", short: "Aguardando" },
+  resolved: { label: "Resolvido", short: "Resolvido" },
+};
+
 type Conversation = {
   id: string;
   contact_name: string | null;
@@ -47,6 +56,8 @@ type Conversation = {
   last_message_preview: string | null;
   unread_count: number;
   status: string;
+  service_status: ServiceStatus;
+  service_status_updated_at: string;
 };
 type Message = {
   id: string;
@@ -174,6 +185,8 @@ export default function WhatsAppInbox({
   const [messages, setMessages] = useState<Message[]>([]);
   const [search, setSearch] = useState("");
   const [conversationFilter, setConversationFilter] = useState<"all" | "mine" | "unread" | "leads" | "archived">("all");
+  const [serviceStatusFilter, setServiceStatusFilter] = useState<"all" | ServiceStatus>("all");
+  const [changingServiceStatus, setChangingServiceStatus] = useState(false);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [assigningConversation, setAssigningConversation] = useState(false);
@@ -228,7 +241,7 @@ export default function WhatsAppInbox({
     ] = await Promise.all([
       supabase
         .from("whatsapp_conversations")
-        .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,assigned_to,last_message_at,last_message_preview,unread_count,status")
+        .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,assigned_to,last_message_at,last_message_preview,unread_count,status,service_status,service_status_updated_at")
         .eq("organization_id", organizationId)
         .order("last_message_at", { ascending: false, nullsFirst: false }),
       supabase
@@ -913,6 +926,55 @@ export default function WhatsAppInbox({
     setTagSaving(false);
   };
 
+  const updateServiceStatus = async (nextStatus: ServiceStatus) => {
+    if (!supabase || !selected || changingServiceStatus || selected.service_status === nextStatus) return;
+    setChangingServiceStatus(true);
+    setSendError(null);
+
+    const { error } = await supabase
+      .from("whatsapp_conversations")
+      .update({
+        service_status: nextStatus,
+        service_status_updated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", selected.id)
+      .eq("organization_id", organizationId);
+
+    if (error) {
+      setSendError("Não foi possível alterar o status do atendimento.");
+      setChangingServiceStatus(false);
+      return;
+    }
+
+    if (selected.lead_id && currentUserId) {
+      await supabase.from("lead_activities").insert({
+        organization_id: organizationId,
+        lead_id: selected.lead_id,
+        activity_type: "status_change",
+        title: "Status do atendimento alterado",
+        description: serviceStatusMeta[selected.service_status].label + " → " + serviceStatusMeta[nextStatus].label,
+        occurred_at: new Date().toISOString(),
+        created_by: currentUserId,
+      });
+    }
+
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === selected.id
+          ? {
+              ...conversation,
+              service_status: nextStatus,
+              service_status_updated_at: new Date().toISOString(),
+            }
+          : conversation,
+      ),
+    );
+
+    setChangingServiceStatus(false);
+    await loadConversations();
+  };
+
   const toggleConversationArchive = async () => {
     if (!supabase || !selected) return;
     const nextStatus = selected.status === "archived" ? "open" : "archived";
@@ -944,6 +1006,7 @@ export default function WhatsAppInbox({
       }
       if (conversationFilter === "mine" && item.assigned_to !== currentUserId) return false;
       if (conversationFilter === "unread" && item.unread_count <= 0) return false;
+      if (serviceStatusFilter !== "all" && item.service_status !== serviceStatusFilter) return false;
       if (conversationFilter === "leads" && !item.lead) return false;
       if (!query) return true;
       return [
@@ -961,7 +1024,7 @@ export default function WhatsAppInbox({
         .toLowerCase()
         .includes(query);
     });
-  }, [conversations, search, conversationFilter, currentUserId]);
+  }, [conversations, search, conversationFilter, serviceStatusFilter, currentUserId]);
 
   const previewIcon = (conversation: Conversation) => {
     const preview = conversation.last_message_preview || "Sem mensagens";
@@ -1049,6 +1112,21 @@ export default function WhatsAppInbox({
           <button className={conversationFilter === "archived" ? "active" : ""} onClick={() => setConversationFilter("archived")}>Arquivadas</button>
         </div>
 
+        <div className="wa-service-filter">
+          <span>Fila</span>
+          <select
+            value={serviceStatusFilter}
+            onChange={(event) => setServiceStatusFilter(event.target.value as "all" | ServiceStatus)}
+            aria-label="Filtrar por status do atendimento"
+          >
+            <option value="all">Todos os status</option>
+            <option value="new">Novo</option>
+            <option value="in_progress">Em atendimento</option>
+            <option value="waiting_customer">Aguardando cliente</option>
+            <option value="resolved">Resolvido</option>
+          </select>
+        </div>
+
         <div className="wa-conversations">
           {filtered.length ? (
             filtered.map((conversation) => {
@@ -1068,6 +1146,9 @@ export default function WhatsAppInbox({
                     <span className="wa-preview-line">
                       <small>{previewIcon(conversation)}</small>
                       {conversation.unread_count > 0 && <b>{conversation.unread_count}</b>}
+                    </span>
+                    <span className={"wa-service-pill " + conversation.service_status}>
+                      {serviceStatusMeta[conversation.service_status].short}
                     </span>
                     {conversation.tags.length > 0 && (
                       <span className="wa-list-tags">
@@ -1145,6 +1226,23 @@ export default function WhatsAppInbox({
                 {selected.status === "archived" ? "Reabrir" : "Arquivar"}
               </button>
             </header>
+
+            <div className="wa-service-status-bar">
+              <span>Status do atendimento</span>
+              <div>
+                {(Object.keys(serviceStatusMeta) as ServiceStatus[]).map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    className={(selected.service_status === status ? "active " : "") + status}
+                    onClick={() => void updateServiceStatus(status)}
+                    disabled={changingServiceStatus}
+                  >
+                    {serviceStatusMeta[status].label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="wa-assignment-bar">
               <div className="wa-assignment-copy">
