@@ -33,6 +33,12 @@ type QuickReply = {
   sort_order: number;
 };
 
+type InboxToast = {
+  conversationId: string;
+  title: string;
+  preview: string;
+};
+
 type InternalNote = {
   id: string;
   conversation_id: string;
@@ -279,6 +285,9 @@ export default function WhatsAppInbox({
   const [messageSearchOpen, setMessageSearchOpen] = useState(false);
   const [messageSearch, setMessageSearch] = useState("");
   const [messageSearchIndex, setMessageSearchIndex] = useState(0);
+  const [notificationEnabled, setNotificationEnabled] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState<"default" | "granted" | "denied" | "unsupported">("default");
+  const [inboxToast, setInboxToast] = useState<InboxToast | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -288,6 +297,9 @@ export default function WhatsAppInbox({
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const avatarTriedRef = useRef<Set<string>>(new Set());
   const avatarSyncBlockedRef = useRef(false);
+  const conversationsRef = useRef<Conversation[]>([]);
+  const selectedIdRef = useRef<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadConversations = useCallback(async () => {
     if (!supabase) return;
@@ -531,6 +543,25 @@ export default function WhatsAppInbox({
   }, [loadConversations]);
 
   useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      return;
+    }
+
+    const permission = Notification.permission as "default" | "granted" | "denied";
+    setNotificationPermission(permission);
+    setNotificationEnabled(permission === "granted" && window.localStorage.getItem("wuniflow-wa-notifications") === "enabled");
+  }, []);
+
+  useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 60000);
     return () => clearInterval(timer);
   }, []);
@@ -561,6 +592,7 @@ export default function WhatsAppInbox({
   useEffect(
     () => () => {
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     },
     [],
@@ -644,6 +676,7 @@ export default function WhatsAppInbox({
           const row = payload.new as Message;
           void loadConversations();
           if (row?.conversation_id === selectedId && selectedId) void loadMessages(selectedId);
+          if (payload.eventType === "INSERT" && row?.direction === "inbound") showInboundNotification(row);
         },
       )
       .on(
@@ -679,7 +712,75 @@ export default function WhatsAppInbox({
     return () => {
       void supabase?.removeChannel(channel);
     };
-  }, [organizationId, selectedId, loadConversations, loadMessages, loadNotes]);
+  }, [organizationId, selectedId, loadConversations, loadMessages, loadNotes, showInboundNotification]);
+
+  const showInboundNotification = useCallback((message: Message) => {
+    if (message.direction !== "inbound") return;
+
+    const conversation = conversationsRef.current.find((item) => item.id === message.conversation_id);
+    const title = conversation?.lead?.name || conversation?.contact_name || conversation?.contact_phone || "Nova mensagem";
+    const preview =
+      message.body ||
+      ({
+        image: "📷 Imagem",
+        audio: "🎵 Áudio",
+        video: "🎥 Vídeo",
+        document: "📄 Documento",
+        sticker: "🏷️ Figurinha",
+        location: "📍 Localização",
+        contact: "👤 Contato",
+      }[message.message_type] || "Nova mensagem");
+
+    if (message.conversation_id !== selectedIdRef.current) {
+      setInboxToast({ conversationId: message.conversation_id, title, preview });
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setInboxToast(null), 6500);
+    }
+
+    if (
+      notificationEnabled &&
+      typeof window !== "undefined" &&
+      "Notification" in window &&
+      Notification.permission === "granted" &&
+      (document.hidden || message.conversation_id !== selectedIdRef.current)
+    ) {
+      try {
+        const notification = new Notification(title, {
+          body: preview,
+          tag: "wuniflow-wa-" + message.conversation_id,
+        });
+        notification.onclick = () => {
+          window.focus();
+          setSelectedId(message.conversation_id);
+          notification.close();
+        };
+      } catch {
+        // In-app toast remains available when native browser notifications are unsupported.
+      }
+    }
+  }, [notificationEnabled]);
+
+  const toggleNotifications = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      return;
+    }
+
+    if (Notification.permission !== "granted") {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission !== "granted") {
+        setNotificationEnabled(false);
+        window.localStorage.removeItem("wuniflow-wa-notifications");
+        return;
+      }
+    }
+
+    const next = !notificationEnabled;
+    setNotificationEnabled(next);
+    if (next) window.localStorage.setItem("wuniflow-wa-notifications", "enabled");
+    else window.localStorage.removeItem("wuniflow-wa-notifications");
+  };
 
   const finishRecordingResources = () => {
     if (recordingTimerRef.current) {
@@ -1476,6 +1577,23 @@ export default function WhatsAppInbox({
 
   return (
     <section className={"wa-shell " + (selectedId ? "chat-open" : "")}>
+      {inboxToast && (
+        <button
+          type="button"
+          className="wa-inbox-toast"
+          onClick={() => {
+            setSelectedId(inboxToast.conversationId);
+            setInboxToast(null);
+          }}
+        >
+          <span>💬</span>
+          <span>
+            <strong>{inboxToast.title}</strong>
+            <small>{inboxToast.preview}</small>
+          </span>
+          <i>→</i>
+        </button>
+      )}
       <aside className="wa-list">
         <div className="wa-mobile-topbar">
           <button type="button" className="wa-mobile-menu" onClick={onOpenMenu} aria-label="Abrir menu do CRM">☰</button>
@@ -1514,6 +1632,21 @@ export default function WhatsAppInbox({
             </button>
           </div>
           <div className="wa-list-head-actions">
+            <button
+              type="button"
+              className={"wa-notification-toggle " + (notificationEnabled ? "active" : "")}
+              onClick={() => void toggleNotifications()}
+              title={
+                notificationPermission === "unsupported"
+                  ? "Notificações não suportadas neste navegador"
+                  : notificationEnabled
+                    ? "Desativar notificações"
+                    : "Ativar notificações"
+              }
+              disabled={notificationPermission === "unsupported"}
+            >
+              {notificationEnabled ? "🔔" : "🔕"}
+            </button>
             {canManageSla && (
               <button type="button" className="wa-sla-settings-button" onClick={() => setSlaSettingsOpen(true)}>SLA</button>
             )}
