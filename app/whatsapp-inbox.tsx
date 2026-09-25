@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type LeadSummary = {
@@ -42,6 +42,14 @@ const fmtTime = (value: string | null) =>
   value ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)) : "";
 
 const normalizePhone = (value: string | null | undefined) => (value || "").replace(/\D/g, "");
+
+const normalizeOutboundPhone = (value: string | null | undefined) => {
+  const digits = normalizePhone(value);
+  if (!digits) return "";
+  if (digits.startsWith("55")) return digits;
+  if (digits.length === 10 || digits.length === 11) return "55" + digits;
+  return digits;
+};
 
 const fmtListTime = (value: string | null) => {
   if (!value) return "";
@@ -140,7 +148,15 @@ export default function WhatsAppInbox({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [search, setSearch] = useState("");
-  const [conversationFilter, setConversationFilter] = useState<"all" | "unread" | "leads">("all");
+  const [conversationFilter, setConversationFilter] = useState<"all" | "unread" | "leads" | "archived">("all");
+  const [availableLeads, setAvailableLeads] = useState<LeadSummary[]>([]);
+  const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  const [newChatName, setNewChatName] = useState("");
+  const [newChatPhone, setNewChatPhone] = useState("");
+  const [newChatLeadId, setNewChatLeadId] = useState("");
+  const [newChatError, setNewChatError] = useState<string | null>(null);
+  const [creatingChat, setCreatingChat] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -164,12 +180,15 @@ export default function WhatsAppInbox({
   const loadConversations = useCallback(async () => {
     if (!supabase) return;
 
-    const [{ data: conversationData, error: conversationError }, { data: leadData }] = await Promise.all([
+    const [
+      { data: conversationData, error: conversationError },
+      { data: leadData },
+      { data: channelData },
+    ] = await Promise.all([
       supabase
         .from("whatsapp_conversations")
         .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,last_message_at,last_message_preview,unread_count,status")
         .eq("organization_id", organizationId)
-        .neq("status", "archived")
         .order("last_message_at", { ascending: false, nullsFirst: false }),
       supabase
         .from("leads")
@@ -177,11 +196,21 @@ export default function WhatsAppInbox({
         .eq("organization_id", organizationId)
         .neq("status", "archived")
         .limit(1000),
+      supabase
+        .from("whatsapp_channels")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("provider", "evolution")
+        .eq("is_active", true)
+        .limit(1)
+        .maybeSingle(),
     ]);
 
     if (conversationError) return;
 
     const leads = (leadData || []) as unknown as LeadSummary[];
+    setAvailableLeads(leads);
+    setActiveChannelId(channelData?.id || null);
     const leadById = new Map(leads.map((lead) => [lead.id, lead]));
     const phoneMatches = new Map<string, LeadSummary | null>();
 
@@ -505,9 +534,134 @@ export default function WhatsAppInbox({
 
   const selected = conversations.find((item) => item.id === selectedId) || null;
 
+  const startNewChat = (lead?: LeadSummary) => {
+    setNewChatError(null);
+    setNewChatLeadId(lead?.id || "");
+    setNewChatName(lead?.name || "");
+    setNewChatPhone(lead?.whatsapp || lead?.phone || "");
+    setNewChatOpen(true);
+  };
+
+  const createConversation = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!supabase || !activeChannelId || creatingChat) return;
+
+    const phone = normalizeOutboundPhone(newChatPhone);
+    if (phone.length < 10 || phone.length > 15) {
+      setNewChatError("Informe um WhatsApp válido com DDD.");
+      return;
+    }
+
+    const selectedLead = availableLeads.find((lead) => lead.id === newChatLeadId) || null;
+    const uniquePhoneMatches = availableLeads.filter((lead) =>
+      [lead.whatsapp, lead.phone].some((value) => normalizeOutboundPhone(value) === phone),
+    );
+    const matchedLead = selectedLead || (uniquePhoneMatches.length === 1 ? uniquePhoneMatches[0] : null);
+    const providerConversationId = phone + "@s.whatsapp.net";
+    const contactName = newChatName.trim() || matchedLead?.name || phone;
+
+    setCreatingChat(true);
+    setNewChatError(null);
+
+    const existing = await supabase
+      .from("whatsapp_conversations")
+      .select("id,status")
+      .eq("organization_id", organizationId)
+      .eq("provider", "whatsapp")
+      .eq("provider_conversation_id", providerConversationId)
+      .maybeSingle();
+
+    if (existing.error) {
+      setNewChatError("Não foi possível verificar a conversa.");
+      setCreatingChat(false);
+      return;
+    }
+
+    let conversationId = existing.data?.id || null;
+
+    if (conversationId) {
+      const { error } = await supabase
+        .from("whatsapp_conversations")
+        .update({
+          status: "open",
+          contact_name: contactName,
+          contact_phone: phone,
+          lead_id: matchedLead?.id || null,
+          channel_id: activeChannelId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", conversationId)
+        .eq("organization_id", organizationId);
+
+      if (error) {
+        setNewChatError("Não foi possível reabrir a conversa.");
+        setCreatingChat(false);
+        return;
+      }
+    } else {
+      const { data, error } = await supabase
+        .from("whatsapp_conversations")
+        .insert({
+          organization_id: organizationId,
+          channel_id: activeChannelId,
+          lead_id: matchedLead?.id || null,
+          contact_name: contactName,
+          contact_phone: phone,
+          provider: "whatsapp",
+          provider_conversation_id: providerConversationId,
+          status: "open",
+          metadata: { source: "crm_new_conversation" },
+        })
+        .select("id")
+        .single();
+
+      if (error || !data) {
+        setNewChatError("Não foi possível criar a conversa.");
+        setCreatingChat(false);
+        return;
+      }
+      conversationId = data.id;
+    }
+
+    setNewChatOpen(false);
+    setNewChatName("");
+    setNewChatPhone("");
+    setNewChatLeadId("");
+    setCreatingChat(false);
+    await loadConversations();
+    setConversationFilter("all");
+    setSelectedId(conversationId);
+  };
+
+  const toggleConversationArchive = async () => {
+    if (!supabase || !selected) return;
+    const nextStatus = selected.status === "archived" ? "open" : "archived";
+    const { error } = await supabase
+      .from("whatsapp_conversations")
+      .update({ status: nextStatus, updated_at: new Date().toISOString() })
+      .eq("id", selected.id)
+      .eq("organization_id", organizationId);
+
+    if (error) {
+      setSendError(nextStatus === "archived" ? "Não foi possível arquivar a conversa." : "Não foi possível reabrir a conversa.");
+      return;
+    }
+
+    await loadConversations();
+    if (nextStatus === "archived") {
+      setSelectedId(null);
+      setConversationFilter("all");
+    }
+  };
+
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return conversations.filter((item) => {
+      if (conversationFilter === "archived") {
+        if (item.status !== "archived") return false;
+      } else if (item.status === "archived") {
+        return false;
+      }
       if (conversationFilter === "unread" && item.unread_count <= 0) return false;
       if (conversationFilter === "leads" && !item.lead) return false;
       if (!query) return true;
@@ -588,14 +742,15 @@ export default function WhatsAppInbox({
         <div className="wa-mobile-topbar">
           <button type="button" className="wa-mobile-menu" onClick={onOpenMenu} aria-label="Abrir menu do CRM">☰</button>
           <strong>WhatsApp</strong>
-          <span className="wa-topbar-spacer" />
+          <button type="button" className="wa-new-chat-mobile" onClick={() => startNewChat()} aria-label="Nova conversa" title="Nova conversa">＋</button>
         </div>
 
         <div className="wa-list-head">
           <div>
             <h2>Conversas</h2>
-            <small>{conversations.reduce((count, item) => count + item.unread_count, 0)} não lidas</small>
+            <small>{conversations.filter((item) => item.status !== "archived").reduce((count, item) => count + item.unread_count, 0)} não lidas</small>
           </div>
+          <button type="button" className="wa-new-chat-button" onClick={() => startNewChat()}>+ Nova</button>
         </div>
 
         <div className="wa-search">
@@ -607,6 +762,7 @@ export default function WhatsAppInbox({
           <button className={conversationFilter === "all" ? "active" : ""} onClick={() => setConversationFilter("all")}>Todas</button>
           <button className={conversationFilter === "unread" ? "active" : ""} onClick={() => setConversationFilter("unread")}>Não lidas</button>
           <button className={conversationFilter === "leads" ? "active" : ""} onClick={() => setConversationFilter("leads")}>Leads</button>
+          <button className={conversationFilter === "archived" ? "active" : ""} onClick={() => setConversationFilter("archived")}>Arquivadas</button>
         </div>
 
         <div className="wa-conversations">
@@ -685,6 +841,14 @@ export default function WhatsAppInbox({
                   + Lead
                 </button>
               ) : null}
+              <button
+                type="button"
+                className="wa-archive-action"
+                onClick={() => void toggleConversationArchive()}
+                title={selected.status === "archived" ? "Reabrir conversa" : "Arquivar conversa"}
+              >
+                {selected.status === "archived" ? "Reabrir" : "Arquivar"}
+              </button>
             </header>
 
             <div className="wa-messages">
@@ -703,6 +867,12 @@ export default function WhatsAppInbox({
               <div ref={messagesEndRef} />
             </div>
 
+            {selected.status === "archived" ? (
+              <div className="wa-archived-banner">
+                <span>Conversa arquivada</span>
+                <button type="button" onClick={() => void toggleConversationArchive()}>Reabrir atendimento</button>
+              </div>
+            ) : (
             <div className="wa-compose-wrap">
               {recording && (
                 <div className="wa-recording-status">
@@ -836,6 +1006,7 @@ export default function WhatsAppInbox({
                 )}
               </div>
             </div>
+            )}
           </>
         ) : (
           <div className="wa-chat-empty">
@@ -846,6 +1017,64 @@ export default function WhatsAppInbox({
           </div>
         )}
       </div>
+
+      {newChatOpen && (
+        <div className="wa-new-chat-backdrop" onMouseDown={() => !creatingChat && setNewChatOpen(false)}>
+          <section className="wa-new-chat-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <strong>Nova conversa</strong>
+                <small>Inicie um atendimento pelo WhatsApp conectado à Wuniflow.</small>
+              </div>
+              <button type="button" onClick={() => setNewChatOpen(false)} disabled={creatingChat} aria-label="Fechar">×</button>
+            </header>
+            <form onSubmit={createConversation}>
+              <label>
+                Lead do CRM
+                <select
+                  value={newChatLeadId}
+                  onChange={(event) => {
+                    const leadId = event.target.value;
+                    setNewChatLeadId(leadId);
+                    const lead = availableLeads.find((item) => item.id === leadId);
+                    if (lead) {
+                      setNewChatName(lead.name);
+                      setNewChatPhone(lead.whatsapp || lead.phone || "");
+                    }
+                  }}
+                >
+                  <option value="">Contato avulso</option>
+                  {availableLeads.map((lead) => (
+                    <option key={lead.id} value={lead.id}>
+                      {lead.name}{lead.company_name ? " · " + lead.company_name : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Nome
+                <input value={newChatName} onChange={(event) => setNewChatName(event.target.value)} placeholder="Nome do contato" />
+              </label>
+              <label>
+                WhatsApp
+                <input
+                  value={newChatPhone}
+                  onChange={(event) => setNewChatPhone(event.target.value)}
+                  inputMode="tel"
+                  placeholder="(61) 99999-9999"
+                  required
+                />
+              </label>
+              {newChatError && <p>{newChatError}</p>}
+              {!activeChannelId && <p>Canal WhatsApp indisponível no momento.</p>}
+              <footer>
+                <button type="button" className="secondary" onClick={() => setNewChatOpen(false)} disabled={creatingChat}>Cancelar</button>
+                <button type="submit" disabled={creatingChat || !activeChannelId}>{creatingChat ? "Abrindo…" : "Abrir conversa"}</button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      )}
     </section>
   );
 }
