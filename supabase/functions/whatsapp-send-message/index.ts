@@ -118,26 +118,21 @@ Deno.serve(async (req: Request) => {
     const bytes = new Uint8Array(await file.arrayBuffer());
 
     if (messageType === "audio") {
-      // Evolution API 2.3.7 has a broken/fragile sendWhatsAppAudio path for
-      // base64 and multipart in some installations. Its generic sendMedia
-      // controller accepts base64 and the Evolution channel handles
-      // mediaType=audio, so use that path for CRM recordings.
-      let binary = "";
-      const chunk = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)));
-      }
-      const base64 = btoa(binary);
-      endpoint = evolutionUrl + "/message/sendMedia/" + encodeURIComponent(channel.instance_name);
-      providerHeaders["content-type"] = "application/json";
-      providerBody = JSON.stringify({
-        number: phone,
-        mediatype: "audio",
-        mimetype: mediaMime,
-        media: base64,
-        fileName: mediaFilename || "audio.webm",
-        filename: mediaFilename || "audio.webm",
-      });
+      // Evolution API 2.3.7 exposes a dedicated WhatsApp-audio route using
+      // upload.single("file"). The controller requires file.buffer, so send
+      // the recording as multipart instead of generic sendMedia. This keeps
+      // the message in the WhatsApp audio path and improves linked-device sync.
+      endpoint = evolutionUrl + "/message/sendWhatsAppAudio/" + encodeURIComponent(channel.instance_name);
+      const form = new FormData();
+      const extension =
+        mediaMime === "audio/ogg" ? "ogg" :
+        mediaMime === "audio/mp4" ? "m4a" :
+        mediaMime === "audio/mpeg" ? "mp3" : "webm";
+      const filename = mediaFilename || ("audio-" + Date.now() + "." + extension);
+      form.append("number", phone);
+      form.append("encoding", "true");
+      form.append("file", new Blob([bytes], { type: mediaMime }), filename);
+      providerBody = form;
     } else {
       let binary = "";
       const chunk = 0x8000;
