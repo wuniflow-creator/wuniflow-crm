@@ -1784,3 +1784,145 @@
     max-height:42dvh;
   }
 }
+
+
+/* WhatsApp service queue */
+.wa-service-filter{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  padding:0 10px 8px;
+}
+.wa-service-filter>span{
+  color:#777f89;
+  font-size:7px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+}
+.wa-service-filter select{
+  min-width:0;
+  height:30px;
+  flex:1;
+  padding:0 28px 0 8px;
+  border:1px solid #30353c;
+  border-radius:8px;
+  background:#1f2329;
+  color:#cbd0d6;
+  font-size:8px;
+}
+.wa-service-pill{
+  display:inline-flex;
+  width:max-content;
+  max-width:115px;
+  align-items:center;
+  min-height:18px;
+  margin-top:4px;
+  padding:1px 6px;
+  border:1px solid #3b4149;
+  border-radius:999px;
+  font-size:6px;
+  font-weight:800;
+  line-height:1.2;
+}
+.wa-service-pill.new{
+  border-color:#6b7280;
+  color:#c7cbd1;
+  background:#252a30;
+}
+.wa-service-pill.in_progress{
+  border-color:#6b4f75;
+  color:#eadcf0;
+  background:#2b2130;
+}
+.wa-service-pill.waiting_customer{
+  border-color:#7b6337;
+  color:#ecd79a;
+  background:#2d281d;
+}
+.wa-service-pill.resolved{
+  border-color:#3f6b58;
+  color:#bde8d1;
+  background:#1f2d28;
+}
+.wa-service-status-bar{
+  min-height:50px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:7px 12px;
+  border-bottom:1px solid #282c32;
+  background:#15191e;
+}
+.wa-service-status-bar>span{
+  flex:0 0 auto;
+  color:#858c95;
+  font-size:8px;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+}
+.wa-service-status-bar>div{
+  min-width:0;
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:5px;
+  overflow-x:auto;
+  scrollbar-width:none;
+}
+.wa-service-status-bar>div::-webkit-scrollbar{display:none}
+.wa-service-status-bar button{
+  flex:0 0 auto;
+  min-height:29px;
+  padding:4px 8px;
+  border:1px solid #343941;
+  border-radius:999px;
+  background:#21252b;
+  color:#9fa6af;
+  box-shadow:none;
+  font-size:7px;
+  font-weight:750;
+}
+.wa-service-status-bar button.active.new{
+  border-color:#6b7280;
+  color:#eef0f2;
+  background:#30363d;
+}
+.wa-service-status-bar button.active.in_progress{
+  border-color:#76507d;
+  color:#f2e2f4;
+  background:#38273d;
+}
+.wa-service-status-bar button.active.waiting_customer{
+  border-color:#8b713e;
+  color:#f4dda1;
+  background:#382f1f;
+}
+.wa-service-status-bar button.active.resolved{
+  border-color:#477761;
+  color:#c8ecd8;
+  background:#21342c;
+}
+.wa-service-status-bar button:hover{filter:none;background:#2a2f36}
+@media(max-width:900px){
+  .wa-service-filter{
+    padding:0 8px 7px;
+  }
+  .wa-service-status-bar{
+    min-height:44px;
+    display:block;
+    padding:5px 8px;
+  }
+  .wa-service-status-bar>span{
+    display:none;
+  }
+  .wa-service-status-bar>div{
+    justify-content:flex-start;
+  }
+  .wa-service-status-bar button{
+    min-height:28px;
+    padding:4px 7px;
+    font-size:7px;
+  }
+}
