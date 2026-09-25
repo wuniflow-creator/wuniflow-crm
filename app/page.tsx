@@ -140,10 +140,54 @@ export default function Home() {
       isEmbedded ? "embedded" : isIos ? "ios" : isAndroid ? "android" : "desktop",
     );
 
+    const applyWhatsAppNavigation = (conversationId?: string | null) => {
+      setView("whatsapp");
+      setMobileMenuOpen(false);
+      if (conversationId) setInitialWhatsAppConversationId(conversationId);
+    };
+
+    const consumePendingNavigation = async () => {
+      if (!("caches" in window)) return;
+
+      try {
+        const cache = await caches.open("wuniflow-navigation-v1");
+        const key = new URL("/__wuniflow_pending_navigation__", window.location.origin).href;
+        const response = await cache.match(key);
+        if (!response) return;
+
+        await cache.delete(key);
+        const pending = await response.json() as {
+          type?: string;
+          conversationId?: string | null;
+          createdAt?: number;
+        };
+
+        // Ignore stale clicks so an old notification cannot reopen a conversation later.
+        if (pending.createdAt && Date.now() - pending.createdAt > 5 * 60 * 1000) return;
+
+        if (pending.type === "OPEN_WHATSAPP_CONVERSATION") {
+          applyWhatsAppNavigation(pending.conversationId || null);
+        } else if (pending.type === "OPEN_WHATSAPP") {
+          applyWhatsAppNavigation(null);
+        }
+      } catch {
+        // Query string and postMessage remain as fallbacks.
+      }
+    };
+
     const params = new URLSearchParams(window.location.search);
-    if (params.get("view") === "whatsapp") setView("whatsapp");
-    const conversationId = params.get("conversation");
-    if (conversationId) setInitialWhatsAppConversationId(conversationId);
+    if (params.get("view") === "whatsapp") {
+      applyWhatsAppNavigation(params.get("conversation"));
+    }
+
+    void consumePendingNavigation();
+
+    const handleWindowFocus = () => {
+      void consumePendingNavigation();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") void consumePendingNavigation();
+    };
 
     const handleBeforeInstall = (event: Event) => {
       event.preventDefault();
@@ -156,22 +200,27 @@ export default function Home() {
     const handleServiceWorkerMessage = (event: MessageEvent) => {
       const data = event.data as { type?: string; conversationId?: string } | null;
       if (!data?.type) return;
-      if (data.type === "OPEN_WHATSAPP" || data.type === "OPEN_WHATSAPP_CONVERSATION") {
-        setView("whatsapp");
-        setMobileMenuOpen(false);
-      }
-      if (data.type === "OPEN_WHATSAPP_CONVERSATION" && data.conversationId) {
-        setInitialWhatsAppConversationId(data.conversationId);
+
+      if (data.type === "OPEN_WHATSAPP_CONVERSATION") {
+        applyWhatsAppNavigation(data.conversationId || null);
+        void consumePendingNavigation();
+      } else if (data.type === "OPEN_WHATSAPP") {
+        applyWhatsAppNavigation(null);
+        void consumePendingNavigation();
       }
     };
 
     window.addEventListener("beforeinstallprompt", handleBeforeInstall);
     window.addEventListener("appinstalled", handleInstalled);
+    window.addEventListener("focus", handleWindowFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     navigator.serviceWorker?.addEventListener("message", handleServiceWorkerMessage);
 
     return () => {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
       window.removeEventListener("appinstalled", handleInstalled);
+      window.removeEventListener("focus", handleWindowFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       navigator.serviceWorker?.removeEventListener("message", handleServiceWorkerMessage);
     };
   }, []);
