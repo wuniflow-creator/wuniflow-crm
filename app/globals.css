@@ -2577,3 +2577,88 @@
     grid-template-columns:1fr;
   }
 }
+
+
+/* WhatsApp inbound notifications */
+.wa-notification-toggle{
+  width:32px;
+  height:32px;
+  display:grid;
+  place-items:center;
+  padding:0;
+  border:1px solid #394049;
+  border-radius:9px;
+  background:#22272d;
+  color:#aeb5bd;
+  box-shadow:none;
+  font-size:13px;
+}
+.wa-notification-toggle.active{
+  border-color:#4d705e;
+  background:#213129;
+}
+.wa-notification-toggle:hover{background:#2a3037;filter:none}
+.wa-inbox-toast{
+  position:fixed;
+  z-index:200;
+  top:18px;
+  right:18px;
+  width:min(360px,calc(100vw - 24px));
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:center;
+  gap:9px;
+  padding:10px 11px;
+  border:1px solid #3a4048;
+  border-radius:12px;
+  background:#171b20;
+  color:#e9edf0;
+  text-align:left;
+  box-shadow:0 18px 55px #000b;
+}
+.wa-inbox-toast>span:first-child{
+  width:30px;
+  height:30px;
+  display:grid;
+  place-items:center;
+  border-radius:50%;
+  background:#252a31;
+  font-size:14px;
+}
+.wa-inbox-toast>span:nth-child(2){
+  min-width:0;
+}
+.wa-inbox-toast strong,
+.wa-inbox-toast small{
+  display:block;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.wa-inbox-toast strong{
+  font-size:9px;
+}
+.wa-inbox-toast small{
+  margin-top:3px;
+  color:#9fa7af;
+  font-size:7px;
+}
+.wa-inbox-toast i{
+  color:#8e969f;
+  font-size:14px;
+  font-style:normal;
+}
+.wa-inbox-toast:hover{background:#1e2329;filter:none}
+@media(max-width:900px){
+  .wa-notification-toggle{
+    width:30px;
+    height:30px;
+    font-size:12px;
+  }
+  .wa-inbox-toast{
+    top:calc(8px + env(safe-area-inset-top));
+    right:8px;
+    left:8px;
+    width:auto;
+  }
+}
