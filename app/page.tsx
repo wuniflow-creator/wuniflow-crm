@@ -117,7 +117,10 @@ export default function Home() {
     if (typeof window === "undefined") return;
 
     if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => undefined);
+      void navigator.serviceWorker
+        .register("/sw.js", { scope: "/" })
+        .then((registration) => registration.update())
+        .catch(() => undefined);
     }
 
     const navigatorWithStandalone = navigator as Navigator & { standalone?: boolean };
