@@ -641,6 +641,52 @@ export default function WhatsAppInbox({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, selectedId]);
 
+  const showInboundNotification = useCallback((message: Message) => {
+    if (message.direction !== "inbound") return;
+
+    const conversation = conversationsRef.current.find((item) => item.id === message.conversation_id);
+    const title = conversation?.lead?.name || conversation?.contact_name || conversation?.contact_phone || "Nova mensagem";
+    const preview =
+      message.body ||
+      ({
+        image: "📷 Imagem",
+        audio: "🎵 Áudio",
+        video: "🎥 Vídeo",
+        document: "📄 Documento",
+        sticker: "🏷️ Figurinha",
+        location: "📍 Localização",
+        contact: "👤 Contato",
+      }[message.message_type] || "Nova mensagem");
+
+    if (message.conversation_id !== selectedIdRef.current) {
+      setInboxToast({ conversationId: message.conversation_id, title, preview });
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setInboxToast(null), 6500);
+    }
+
+    if (
+      notificationEnabled &&
+      typeof window !== "undefined" &&
+      "Notification" in window &&
+      Notification.permission === "granted" &&
+      (document.hidden || message.conversation_id !== selectedIdRef.current)
+    ) {
+      try {
+        const notification = new Notification(title, {
+          body: preview,
+          tag: "wuniflow-wa-" + message.conversation_id,
+        });
+        notification.onclick = () => {
+          window.focus();
+          setSelectedId(message.conversation_id);
+          notification.close();
+        };
+      } catch {
+        // In-app toast remains available when native browser notifications are unsupported.
+      }
+    }
+  }, [notificationEnabled]);
+
   useEffect(() => {
     if (!selectedId) {
       setMessages([]);
@@ -735,52 +781,6 @@ export default function WhatsAppInbox({
       void supabase?.removeChannel(channel);
     };
   }, [organizationId, selectedId, loadConversations, loadMessages, loadNotes, showInboundNotification]);
-
-  const showInboundNotification = useCallback((message: Message) => {
-    if (message.direction !== "inbound") return;
-
-    const conversation = conversationsRef.current.find((item) => item.id === message.conversation_id);
-    const title = conversation?.lead?.name || conversation?.contact_name || conversation?.contact_phone || "Nova mensagem";
-    const preview =
-      message.body ||
-      ({
-        image: "📷 Imagem",
-        audio: "🎵 Áudio",
-        video: "🎥 Vídeo",
-        document: "📄 Documento",
-        sticker: "🏷️ Figurinha",
-        location: "📍 Localização",
-        contact: "👤 Contato",
-      }[message.message_type] || "Nova mensagem");
-
-    if (message.conversation_id !== selectedIdRef.current) {
-      setInboxToast({ conversationId: message.conversation_id, title, preview });
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      toastTimerRef.current = setTimeout(() => setInboxToast(null), 6500);
-    }
-
-    if (
-      notificationEnabled &&
-      typeof window !== "undefined" &&
-      "Notification" in window &&
-      Notification.permission === "granted" &&
-      (document.hidden || message.conversation_id !== selectedIdRef.current)
-    ) {
-      try {
-        const notification = new Notification(title, {
-          body: preview,
-          tag: "wuniflow-wa-" + message.conversation_id,
-        });
-        notification.onclick = () => {
-          window.focus();
-          setSelectedId(message.conversation_id);
-          notification.close();
-        };
-      } catch {
-        // In-app toast remains available when native browser notifications are unsupported.
-      }
-    }
-  }, [notificationEnabled]);
 
   const toggleNotifications = async () => {
     if (typeof window === "undefined" || !("Notification" in window)) {
