@@ -2872,3 +2872,59 @@
     grid-template-columns:repeat(3,minmax(0,1fr));
   }
 }
+
+
+/* PWA install guidance */
+.install-pwa{
+  color:#f0d9f3!important;
+  font-weight:750;
+}
+.pwa-install-modal{
+  width:min(520px,100%);
+}
+.pwa-install-body{
+  display:grid;
+  gap:10px;
+  padding:18px 20px 22px;
+}
+.pwa-install-body strong{
+  color:#f1f3f5;
+  font-size:14px;
+}
+.pwa-install-body p{
+  margin:0;
+  color:#aeb5bd;
+  font-size:12px;
+  line-height:1.55;
+}
+.pwa-install-body code{
+  display:block;
+  margin-top:4px;
+  padding:10px 11px;
+  border:1px solid #343a42;
+  border-radius:9px;
+  background:#1b2025;
+  color:#d8dde2;
+  font-size:10px;
+  overflow-wrap:anywhere;
+}
+.wa-mobile-install{
+  display:none;
+  width:38px;
+  height:38px;
+  place-items:center;
+  padding:0;
+  border:1px solid #4f3855;
+  border-radius:50%;
+  background:#2b2030;
+  color:#efdff1;
+  box-shadow:none;
+  font-size:15px;
+}
+@media(max-width:900px){
+  .wa-mobile-install{display:grid}
+  .pwa-install-modal{
+    width:100%;
+    border-radius:18px 18px 0 0;
+  }
+}
