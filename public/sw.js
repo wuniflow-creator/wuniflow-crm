@@ -69,27 +69,37 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data || {};
   const conversationId = data.conversationId || null;
-  const url = data.url || "/?view=whatsapp";
+  const relativeUrl = data.url || (conversationId
+    ? "/?view=whatsapp&conversation=" + encodeURIComponent(conversationId)
+    : "/?view=whatsapp");
+  const targetUrl = new URL(relativeUrl, self.location.origin).href;
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (clients) => {
       for (const client of clients) {
+        if ("navigate" in client) {
+          try {
+            await client.navigate(targetUrl);
+            await client.focus();
+            return;
+          } catch {
+            // Fall through to postMessage/openWindow.
+          }
+        }
+
         if ("focus" in client) {
           await client.focus();
-          if (conversationId) {
-            client.postMessage({
-              type: "OPEN_WHATSAPP_CONVERSATION",
-              conversationId,
-            });
-          } else {
-            client.postMessage({ type: "OPEN_WHATSAPP" });
-          }
+          client.postMessage(
+            conversationId
+              ? { type: "OPEN_WHATSAPP_CONVERSATION", conversationId }
+              : { type: "OPEN_WHATSAPP" },
+          );
           return;
         }
       }
 
       if (self.clients.openWindow) {
-        await self.clients.openWindow(url);
+        await self.clients.openWindow(targetUrl);
       }
     }),
   );
