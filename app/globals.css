@@ -1407,3 +1407,93 @@
     padding-bottom:env(safe-area-inset-bottom);
   }
 }
+
+
+/* WhatsApp assignment workflow */
+.wa-assignment-bar{
+  min-height:48px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:7px 12px;
+  border-bottom:1px solid #282c32;
+  background:#15191e;
+}
+.wa-assignment-copy{
+  min-width:0;
+  display:flex;
+  align-items:center;
+  gap:7px;
+}
+.wa-assignment-copy>span{
+  color:#858c95;
+  font-size:8px;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+}
+.wa-assignment-copy>strong{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:#dce0e4;
+  font-size:10px;
+}
+.wa-assignment-actions{
+  display:flex;
+  align-items:center;
+  gap:7px;
+}
+.wa-assignment-actions button{
+  min-height:30px;
+  padding:5px 9px;
+  border-radius:8px;
+  border:1px solid #53305b;
+  background:#35203b;
+  color:#efdbf2;
+  box-shadow:none;
+  font-size:8px;
+  font-weight:700;
+}
+.wa-assignment-actions button:hover{background:#422649;filter:none}
+.wa-assignment-actions select{
+  max-width:175px;
+  height:31px;
+  padding:0 28px 0 8px;
+  border:1px solid #343941;
+  border-radius:8px;
+  background:#23272d;
+  color:#dce0e4;
+  font-size:8px;
+}
+.wa-assignee-context{
+  display:block;
+  margin-top:3px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:#9da4ad;
+  font-size:8px;
+}
+@media(max-width:900px){
+  .wa-assignment-bar{
+    min-height:45px;
+    padding:6px 9px;
+  }
+  .wa-assignment-copy>span{display:none}
+  .wa-assignment-copy>strong{font-size:9px}
+  .wa-assignment-actions{
+    gap:5px;
+  }
+  .wa-assignment-actions button{
+    min-height:29px;
+    padding:5px 8px;
+    font-size:7px;
+  }
+  .wa-assignment-actions select{
+    max-width:132px;
+    height:29px;
+    font-size:7px;
+  }
+}
