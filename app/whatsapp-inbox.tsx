@@ -1167,33 +1167,52 @@ export default function WhatsAppInbox({
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return conversations.filter((item) => {
-      if (conversationFilter === "archived") {
-        if (item.status !== "archived") return false;
-      } else if (item.status === "archived") {
-        return false;
-      }
-      if (conversationFilter === "mine" && item.assigned_to !== currentUserId) return false;
-      if (conversationFilter === "unread" && item.unread_count <= 0) return false;
-      if (conversationFilter === "overdue" && !getSlaState(item).overdue) return false;
-      if (serviceStatusFilter !== "all" && item.service_status !== serviceStatusFilter) return false;
-      if (conversationFilter === "leads" && !item.lead) return false;
-      if (!query) return true;
-      return [
-        item.contact_name,
-        item.contact_phone,
-        item.last_message_preview,
-        item.lead?.name,
-        item.lead?.company_name,
-        item.lead?.pipeline_stages?.name,
-        item.assignee?.full_name,
-        ...item.tags.map((tag) => tag.name),
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(query);
-    });
+    const priorityRank: Record<ServicePriority, number> = { urgent: 4, high: 3, normal: 2, low: 1 };
+
+    return conversations
+      .filter((item) => {
+        if (conversationFilter === "archived") {
+          if (item.status !== "archived") return false;
+        } else if (item.status === "archived") {
+          return false;
+        }
+        if (conversationFilter === "mine" && item.assigned_to !== currentUserId) return false;
+        if (conversationFilter === "unread" && item.unread_count <= 0) return false;
+        if (conversationFilter === "overdue" && !getSlaState(item).overdue) return false;
+        if (serviceStatusFilter !== "all" && item.service_status !== serviceStatusFilter) return false;
+        if (conversationFilter === "leads" && !item.lead) return false;
+        if (!query) return true;
+        return [
+          item.contact_name,
+          item.contact_phone,
+          item.last_message_preview,
+          item.lead?.name,
+          item.lead?.company_name,
+          item.lead?.pipeline_stages?.name,
+          item.assignee?.full_name,
+          servicePriorityMeta[item.service_priority].label,
+          ...item.tags.map((tag) => tag.name),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      })
+      .sort((a, b) => {
+        const aSla = getSlaState(a);
+        const bSla = getSlaState(b);
+        if (aSla.overdue !== bSla.overdue) return aSla.overdue ? -1 : 1;
+
+        const priorityDiff = priorityRank[b.service_priority] - priorityRank[a.service_priority];
+        if (priorityDiff !== 0) return priorityDiff;
+
+        if (aSla.active !== bSla.active) return aSla.active ? -1 : 1;
+        if (aSla.active && bSla.active && aSla.elapsedMs !== bSla.elapsedMs) {
+          return bSla.elapsedMs - aSla.elapsedMs;
+        }
+
+        return new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime();
+      });
   }, [conversations, search, conversationFilter, serviceStatusFilter, currentUserId, getSlaState]);
 
   const previewIcon = (conversation: Conversation) => {
@@ -1258,7 +1277,12 @@ export default function WhatsAppInbox({
         <div className="wa-mobile-topbar">
           <button type="button" className="wa-mobile-menu" onClick={onOpenMenu} aria-label="Abrir menu do CRM">☰</button>
           <strong>WhatsApp</strong>
-          <button type="button" className="wa-new-chat-mobile" onClick={() => startNewChat()} aria-label="Nova conversa" title="Nova conversa">＋</button>
+          <span className="wa-mobile-top-actions">
+            {canManageSla && (
+              <button type="button" className="wa-mobile-sla" onClick={() => setSlaSettingsOpen(true)} aria-label="Configurar SLA" title="Configurar SLA">⏱</button>
+            )}
+            <button type="button" className="wa-new-chat-mobile" onClick={() => startNewChat()} aria-label="Nova conversa" title="Nova conversa">＋</button>
+          </span>
         </div>
 
         <div className="wa-list-head">
@@ -1291,6 +1315,25 @@ export default function WhatsAppInbox({
             )}
           </button>
           <button className={conversationFilter === "archived" ? "active" : ""} onClick={() => setConversationFilter("archived")}>Arquivadas</button>
+        </div>
+
+        <div className="wa-queue-summary">
+          <button type="button" onClick={() => { setConversationFilter("all"); setServiceStatusFilter("new"); }}>
+            <strong>{conversations.filter((item) => item.status !== "archived" && item.service_status === "new").length}</strong>
+            <span>Novos</span>
+          </button>
+          <button type="button" onClick={() => { setConversationFilter("all"); setServiceStatusFilter("in_progress"); }}>
+            <strong>{conversations.filter((item) => item.status !== "archived" && item.service_status === "in_progress").length}</strong>
+            <span>Atendimento</span>
+          </button>
+          <button type="button" onClick={() => { setConversationFilter("all"); setServiceStatusFilter("waiting_customer"); }}>
+            <strong>{conversations.filter((item) => item.status !== "archived" && item.service_status === "waiting_customer").length}</strong>
+            <span>Aguardando</span>
+          </button>
+          <button type="button" className={conversations.some((item) => item.status !== "archived" && getSlaState(item).overdue) ? "alert" : ""} onClick={() => { setConversationFilter("overdue"); setServiceStatusFilter("all"); }}>
+            <strong>{conversations.filter((item) => item.status !== "archived" && getSlaState(item).overdue).length}</strong>
+            <span>Atrasadas</span>
+          </button>
         </div>
 
         <div className="wa-service-filter">
