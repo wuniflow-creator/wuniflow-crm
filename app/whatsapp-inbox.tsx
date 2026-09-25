@@ -531,7 +531,28 @@ export default function WhatsAppInbox({
     void loadMessages(selectedId);
     void loadNotes(selectedId);
     if (supabase) {
-      void supabase.rpc("mark_whatsapp_conversation_read", { p_conversation_id: selectedId }).then(() => loadConversations());
+      void (async () => {
+        const session = await supabase.auth.getSession();
+        const token = session.data.session?.access_token;
+        let providerCallFailed = !token;
+
+        if (token) {
+          const { error } = await supabase.functions.invoke("whatsapp-mark-read", {
+            body: { conversation_id: selectedId },
+            headers: { Authorization: "Bearer " + token },
+          });
+          providerCallFailed = Boolean(error);
+        }
+
+        // Provider read sync is best-effort; never leave the CRM unread if it fails.
+        if (providerCallFailed) {
+          await supabase.rpc("mark_whatsapp_conversation_read", {
+            p_conversation_id: selectedId,
+          });
+        }
+
+        await loadConversations();
+      })();
     }
   }, [selectedId, loadMessages, loadNotes, loadConversations]);
 
