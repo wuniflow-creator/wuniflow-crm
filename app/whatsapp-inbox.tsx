@@ -592,6 +592,11 @@ export default function WhatsAppInbox({
           if (selectedId && row?.conversation_id === selectedId) void loadNotes(selectedId);
         },
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "whatsapp_inbox_settings", filter: "organization_id=eq." + organizationId },
+        () => void loadConversations(),
+      )
       .subscribe();
 
     return () => {
