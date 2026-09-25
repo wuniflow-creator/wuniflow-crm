@@ -134,17 +134,44 @@ Deno.serve(async (req: Request) => {
               ? "failed"
               : null;
     if (!nextStatus) return json({ ignored: true, reason: "unsupported_status" }, 202);
-    const patch: Record<string, unknown> = { status: nextStatus };
-    const now = new Date().toISOString();
-    if (nextStatus === "delivered") patch.delivered_at = now;
-    if (nextStatus === "read") { patch.delivered_at = now; patch.read_at = now; }
-    const updated = await supabase.from("whatsapp_messages").update(patch)
+
+    const current = await supabase
+      .from("whatsapp_messages")
+      .select("id,status,delivered_at,read_at")
       .eq("organization_id", channel.organization_id)
       .eq("provider_message_id", parsed.providerMessageId)
       .eq("direction", "outbound")
-      .select("id").maybeSingle();
+      .maybeSingle();
+
+    if (current.error) return json({ error: "message_status_lookup_failed" }, 500);
+    if (!current.data) return json({ ignored: true, reason: "message_not_found_for_status" }, 202);
+
+    const rank: Record<string, number> = { sent: 1, delivered: 2, read: 3 };
+    const currentStatus =
+      current.data.read_at ? "read" :
+      current.data.delivered_at ? "delivered" :
+      String(current.data.status || "sent");
+    const currentRank = rank[currentStatus] ?? 0;
+    const nextRank = rank[nextStatus] ?? 0;
+
+    // ACK events may arrive out of order. Never regress sent <- delivered <- read.
+    if (nextStatus !== "failed" && nextRank <= currentRank) {
+      return json({ ok: true, status_updated: false, reason: "status_not_advanced", current_status: currentStatus });
+    }
+
+    const patch: Record<string, unknown> = { status: nextStatus };
+    const now = new Date().toISOString();
+    if (nextStatus === "delivered") patch.delivered_at = current.data.delivered_at ?? now;
+    if (nextStatus === "read") {
+      patch.delivered_at = current.data.delivered_at ?? now;
+      patch.read_at = current.data.read_at ?? now;
+    }
+
+    const updated = await supabase.from("whatsapp_messages").update(patch)
+      .eq("id", current.data.id)
+      .select("id,status,delivered_at,read_at").maybeSingle();
     if (updated.error) return json({ error: "message_status_update_failed" }, 500);
-    return json({ ok: true, status_updated: Boolean(updated.data) });
+    return json({ ok: true, status_updated: Boolean(updated.data), status: updated.data?.status ?? currentStatus });
   }
 
   const conversationKey = parsed.remoteJid ?? parsed.phone;
