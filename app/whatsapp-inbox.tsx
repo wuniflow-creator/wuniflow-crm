@@ -18,6 +18,21 @@ type TeamMember = {
   avatar_url: string | null;
 };
 
+type WhatsAppTag = {
+  id: string;
+  name: string;
+  color: string;
+};
+
+type InternalNote = {
+  id: string;
+  conversation_id: string;
+  body: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type Conversation = {
   id: string;
   contact_name: string | null;
@@ -27,6 +42,7 @@ type Conversation = {
   lead: LeadSummary | null;
   assigned_to: string | null;
   assignee: TeamMember | null;
+  tags: WhatsAppTag[];
   last_message_at: string | null;
   last_message_preview: string | null;
   unread_count: number;
@@ -161,6 +177,15 @@ export default function WhatsAppInbox({
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [assigningConversation, setAssigningConversation] = useState(false);
+  const [availableTags, setAvailableTags] = useState<WhatsAppTag[]>([]);
+  const [notes, setNotes] = useState<InternalNote[]>([]);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [tagMenuOpen, setTagMenuOpen] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [newTagColor, setNewTagColor] = useState("#8b5cf6");
+  const [tagSaving, setTagSaving] = useState(false);
   const [availableLeads, setAvailableLeads] = useState<LeadSummary[]>([]);
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
@@ -197,6 +222,8 @@ export default function WhatsAppInbox({
       { data: leadData },
       { data: channelData },
       { data: memberData },
+      { data: tagData },
+      { data: conversationTagData },
       userResult,
     ] = await Promise.all([
       supabase
@@ -223,6 +250,16 @@ export default function WhatsAppInbox({
         .select("user_id,role")
         .eq("organization_id", organizationId)
         .eq("is_active", true),
+      supabase
+        .from("whatsapp_tags")
+        .select("id,name,color")
+        .eq("organization_id", organizationId)
+        .order("name"),
+      supabase
+        .from("whatsapp_conversation_tags")
+        .select("conversation_id,tag_id")
+        .eq("organization_id", organizationId)
+        .limit(5000),
       supabase.auth.getUser(),
     ]);
 
@@ -261,6 +298,18 @@ export default function WhatsAppInbox({
     setTeamMembers(members);
     const memberById = new Map(members.map((member) => [member.user_id, member]));
 
+    const tags = (tagData || []) as WhatsAppTag[];
+    setAvailableTags(tags);
+    const tagById = new Map(tags.map((tag) => [tag.id, tag]));
+    const tagsByConversation = new Map<string, WhatsAppTag[]>();
+    for (const relation of (conversationTagData || []) as { conversation_id: string; tag_id: string }[]) {
+      const tag = tagById.get(relation.tag_id);
+      if (!tag) continue;
+      const current = tagsByConversation.get(relation.conversation_id) || [];
+      current.push(tag);
+      tagsByConversation.set(relation.conversation_id, current);
+    }
+
     const leadById = new Map(leads.map((lead) => [lead.id, lead]));
     const phoneMatches = new Map<string, LeadSummary | null>();
 
@@ -272,13 +321,14 @@ export default function WhatsAppInbox({
       }
     }
 
-    const rows = ((conversationData || []) as Omit<Conversation, "lead" | "assignee">[]).map((conversation) => ({
+    const rows = ((conversationData || []) as Omit<Conversation, "lead" | "assignee" | "tags">[]).map((conversation) => ({
       ...conversation,
       lead:
         (conversation.lead_id ? leadById.get(conversation.lead_id) || null : null) ||
         phoneMatches.get(normalizePhone(conversation.contact_phone)) ||
         null,
       assignee: conversation.assigned_to ? memberById.get(conversation.assigned_to) || null : null,
+      tags: tagsByConversation.get(conversation.id) || [],
     }));
 
     setConversations(rows);
@@ -309,6 +359,18 @@ export default function WhatsAppInbox({
       if (item.signedUrl) next[paths[index]] = item.signedUrl;
     });
     setMediaUrls(next);
+  }, [organizationId]);
+
+  const loadNotes = useCallback(async (conversationId: string) => {
+    if (!supabase) return;
+    const { data } = await supabase
+      .from("whatsapp_conversation_notes")
+      .select("id,conversation_id,body,created_by,created_at,updated_at")
+      .eq("organization_id", organizationId)
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: false })
+      .limit(100);
+    setNotes((data || []) as InternalNote[]);
   }, [organizationId]);
 
   const refreshAvatar = useCallback(async (conversation: Conversation) => {
@@ -383,14 +445,18 @@ export default function WhatsAppInbox({
   useEffect(() => {
     if (!selectedId) {
       setMessages([]);
+      setNotes([]);
       setEmojiOpen(false);
+      setNotesOpen(false);
+      setTagMenuOpen(false);
       return;
     }
     void loadMessages(selectedId);
+    void loadNotes(selectedId);
     if (supabase) {
       void supabase.rpc("mark_whatsapp_conversation_read", { p_conversation_id: selectedId }).then(() => loadConversations());
     }
-  }, [selectedId, loadMessages, loadConversations]);
+  }, [selectedId, loadMessages, loadNotes, loadConversations]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -410,12 +476,30 @@ export default function WhatsAppInbox({
           if (row?.conversation_id === selectedId && selectedId) void loadMessages(selectedId);
         },
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "whatsapp_conversation_tags", filter: "organization_id=eq." + organizationId },
+        () => void loadConversations(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "whatsapp_tags", filter: "organization_id=eq." + organizationId },
+        () => void loadConversations(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "whatsapp_conversation_notes", filter: "organization_id=eq." + organizationId },
+        (payload) => {
+          const row = (payload.new || payload.old) as InternalNote;
+          if (selectedId && row?.conversation_id === selectedId) void loadNotes(selectedId);
+        },
+      )
       .subscribe();
 
     return () => {
       void supabase?.removeChannel(channel);
     };
-  }, [organizationId, selectedId, loadConversations, loadMessages]);
+  }, [organizationId, selectedId, loadConversations, loadMessages, loadNotes]);
 
   const finishRecordingResources = () => {
     if (recordingTimerRef.current) {
@@ -731,6 +815,104 @@ export default function WhatsAppInbox({
     await loadConversations();
   };
 
+  const saveInternalNote = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!supabase || !selected || !currentUserId || noteSaving) return;
+    const body = noteDraft.trim();
+    if (!body) return;
+    if (body.length > 4000) {
+      setSendError("A nota interna deve ter no máximo 4.000 caracteres.");
+      return;
+    }
+
+    setNoteSaving(true);
+    const { error } = await supabase.from("whatsapp_conversation_notes").insert({
+      organization_id: organizationId,
+      conversation_id: selected.id,
+      body,
+      created_by: currentUserId,
+    });
+
+    if (error) {
+      setSendError("Não foi possível salvar a nota interna.");
+      setNoteSaving(false);
+      return;
+    }
+
+    setNoteDraft("");
+    await loadNotes(selected.id);
+    setNoteSaving(false);
+  };
+
+  const createTag = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!supabase || !currentUserId || tagSaving) return;
+    const name = newTagName.trim();
+    if (!name) return;
+
+    setTagSaving(true);
+    const { data, error } = await supabase
+      .from("whatsapp_tags")
+      .insert({
+        organization_id: organizationId,
+        name,
+        color: newTagColor,
+        created_by: currentUserId,
+      })
+      .select("id,name,color")
+      .single();
+
+    if (error || !data) {
+      setSendError(error?.code === "23505" ? "Essa etiqueta já existe." : "Não foi possível criar a etiqueta.");
+      setTagSaving(false);
+      return;
+    }
+
+    setNewTagName("");
+    setNewTagColor("#8b5cf6");
+    await loadConversations();
+
+    if (selected) {
+      await supabase.from("whatsapp_conversation_tags").insert({
+        organization_id: organizationId,
+        conversation_id: selected.id,
+        tag_id: data.id,
+        created_by: currentUserId,
+      });
+      await loadConversations();
+    }
+    setTagSaving(false);
+  };
+
+  const toggleTag = async (tagId: string) => {
+    if (!supabase || !selected || !currentUserId || tagSaving) return;
+    const isAssigned = selected.tags.some((tag) => tag.id === tagId);
+    setTagSaving(true);
+
+    const result = isAssigned
+      ? await supabase
+          .from("whatsapp_conversation_tags")
+          .delete()
+          .eq("organization_id", organizationId)
+          .eq("conversation_id", selected.id)
+          .eq("tag_id", tagId)
+      : await supabase.from("whatsapp_conversation_tags").insert({
+          organization_id: organizationId,
+          conversation_id: selected.id,
+          tag_id: tagId,
+          created_by: currentUserId,
+        });
+
+    if (result.error) {
+      setSendError("Não foi possível alterar a etiqueta.");
+      setTagSaving(false);
+      return;
+    }
+
+    await loadConversations();
+    setTagSaving(false);
+  };
+
   const toggleConversationArchive = async () => {
     if (!supabase || !selected) return;
     const nextStatus = selected.status === "archived" ? "open" : "archived";
@@ -772,6 +954,7 @@ export default function WhatsAppInbox({
         item.lead?.company_name,
         item.lead?.pipeline_stages?.name,
         item.assignee?.full_name,
+        ...item.tags.map((tag) => tag.name),
       ]
         .filter(Boolean)
         .join(" ")
@@ -886,6 +1069,14 @@ export default function WhatsAppInbox({
                       <small>{previewIcon(conversation)}</small>
                       {conversation.unread_count > 0 && <b>{conversation.unread_count}</b>}
                     </span>
+                    {conversation.tags.length > 0 && (
+                      <span className="wa-list-tags">
+                        {conversation.tags.slice(0, 3).map((tag) => (
+                          <i key={tag.id} style={{ borderColor: tag.color, color: tag.color }}>{tag.name}</i>
+                        ))}
+                        {conversation.tags.length > 3 && <i>+{conversation.tags.length - 3}</i>}
+                      </span>
+                    )}
                     {conversation.assignee && (
                       <span className="wa-assignee-context">👤 {conversation.assignee.full_name}</span>
                     )}
@@ -985,6 +1176,124 @@ export default function WhatsAppInbox({
                 </select>
               </div>
             </div>
+
+            <div className="wa-context-bar">
+              <div className="wa-context-tags">
+                {selected.tags.map((tag) => (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    className="wa-tag-chip"
+                    style={{ borderColor: tag.color, color: tag.color }}
+                    onClick={() => void toggleTag(tag.id)}
+                    title="Remover etiqueta"
+                  >
+                    {tag.name} ×
+                  </button>
+                ))}
+                <button type="button" className="wa-context-add" onClick={() => setTagMenuOpen((value) => !value)}>
+                  + Etiqueta
+                </button>
+              </div>
+              <button
+                type="button"
+                className={"wa-notes-toggle " + (notesOpen ? "active" : "")}
+                onClick={() => setNotesOpen((value) => !value)}
+              >
+                Nota interna{notes.length ? " · " + notes.length : ""}
+              </button>
+
+              {tagMenuOpen && (
+                <div className="wa-tag-menu">
+                  <strong>Etiquetas</strong>
+                  <div className="wa-tag-options">
+                    {availableTags.length ? availableTags.map((tag) => {
+                      const active = selected.tags.some((item) => item.id === tag.id);
+                      return (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          className={active ? "active" : ""}
+                          onClick={() => void toggleTag(tag.id)}
+                          disabled={tagSaving}
+                        >
+                          <i style={{ background: tag.color }} />
+                          {tag.name}
+                          <span>{active ? "✓" : "+"}</span>
+                        </button>
+                      );
+                    }) : <small>Nenhuma etiqueta criada.</small>}
+                  </div>
+                  <form onSubmit={createTag} className="wa-tag-create">
+                    <input
+                      value={newTagName}
+                      onChange={(event) => setNewTagName(event.target.value)}
+                      placeholder="Nova etiqueta"
+                      maxLength={32}
+                    />
+                    <input
+                      type="color"
+                      value={newTagColor}
+                      onChange={(event) => setNewTagColor(event.target.value)}
+                      aria-label="Cor da etiqueta"
+                    />
+                    <button type="submit" disabled={tagSaving || !newTagName.trim()}>
+                      {tagSaving ? "…" : "Criar"}
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
+
+            {notesOpen && (
+              <section className="wa-notes-panel">
+                <header>
+                  <div>
+                    <strong>Notas internas</strong>
+                    <small>Visíveis apenas para a equipe do CRM. Não são enviadas ao WhatsApp.</small>
+                  </div>
+                  <button type="button" onClick={() => setNotesOpen(false)} aria-label="Fechar notas">×</button>
+                </header>
+                <form onSubmit={saveInternalNote}>
+                  <textarea
+                    value={noteDraft}
+                    onChange={(event) => setNoteDraft(event.target.value)}
+                    placeholder="Escreva uma observação interna sobre este atendimento…"
+                    maxLength={4000}
+                    rows={3}
+                  />
+                  <div>
+                    <small>{noteDraft.length}/4000</small>
+                    <button type="submit" disabled={noteSaving || !noteDraft.trim()}>
+                      {noteSaving ? "Salvando…" : "Salvar nota"}
+                    </button>
+                  </div>
+                </form>
+                <div className="wa-notes-list">
+                  {notes.length ? notes.map((note) => {
+                    const author = teamMembers.find((member) => member.user_id === note.created_by);
+                    return (
+                      <article key={note.id}>
+                        <header>
+                          <strong>{author?.full_name || "Equipe"}</strong>
+                          <time>
+                            {new Intl.DateTimeFormat("pt-BR", {
+                              day: "2-digit",
+                              month: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            }).format(new Date(note.created_at))}
+                          </time>
+                        </header>
+                        <p>{note.body}</p>
+                      </article>
+                    );
+                  }) : (
+                    <div className="wa-notes-empty">Nenhuma nota interna neste atendimento.</div>
+                  )}
+                </div>
+              </section>
+            )}
 
             <div className="wa-messages">
               {messages.map((message, index) => {
