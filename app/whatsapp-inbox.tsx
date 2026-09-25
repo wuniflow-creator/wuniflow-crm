@@ -246,6 +246,8 @@ export default function WhatsAppInbox({
   organizationId,
   initialConversationId,
   onConversationDeepLinkHandled,
+  pwaInstalled = false,
+  onInstallPwa,
   onOpenMenu,
   onOpenLead,
   onCreateLead,
@@ -253,6 +255,8 @@ export default function WhatsAppInbox({
   organizationId: string;
   initialConversationId?: string | null;
   onConversationDeepLinkHandled?: () => void;
+  pwaInstalled?: boolean;
+  onInstallPwa?: () => void;
   onOpenMenu?: () => void;
   onOpenLead?: (leadId: string) => void;
   onCreateLead?: (contact: { name: string; phone: string; conversationId: string }) => void;
@@ -817,15 +821,28 @@ export default function WhatsAppInbox({
   }, [organizationId, selectedId, loadConversations, loadMessages, loadNotes, showInboundNotification]);
 
   const toggleNotifications = async () => {
+    if (!supabase || !currentUserId || typeof window === "undefined") {
+      setInboxToast({
+        conversationId: null,
+        title: "Ainda carregando",
+        preview: "Aguarde alguns segundos e tente ativar o Web Push novamente.",
+      });
+      return;
+    }
+
     if (
-      !supabase ||
-      !currentUserId ||
-      typeof window === "undefined" ||
       !("Notification" in window) ||
       !("serviceWorker" in navigator) ||
       !("PushManager" in window)
     ) {
       setNotificationPermission("unsupported");
+      setInboxToast({
+        conversationId: null,
+        title: "Este navegador não oferece Web Push",
+        preview: "Abra o CRM no Google Chrome. Se estiver dentro de outro aplicativo, use “Abrir no Chrome”.",
+      });
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setInboxToast(null), 8000);
       return;
     }
 
@@ -1770,6 +1787,9 @@ export default function WhatsAppInbox({
             <i className={"wa-health-dot " + channelHealth} title={"Canal " + channelHealth} />
           </span>
           <span className="wa-mobile-top-actions">
+            {!pwaInstalled && onInstallPwa && (
+              <button type="button" className="wa-mobile-install" onClick={onInstallPwa} aria-label="Instalar Wuniflow CRM" title="Instalar Wuniflow CRM">⬇</button>
+            )}
             {canViewMetrics && (
               <button type="button" className="wa-mobile-metrics" onClick={openMetrics} aria-label="Métricas do Inbox" title="Métricas do Inbox">▦</button>
             )}
@@ -1817,7 +1837,7 @@ export default function WhatsAppInbox({
                     ? "Desativar Web Push neste dispositivo"
                     : "Ativar Web Push neste dispositivo"
               }
-              disabled={notificationPermission === "unsupported" || notificationBusy}
+              disabled={notificationBusy}
             >
               {notificationBusy ? "…" : notificationEnabled ? "🔔" : "🔕"}
             </button>
