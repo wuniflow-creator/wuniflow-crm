@@ -35,6 +35,7 @@ type InternalNote = {
 
 type ServiceStatus = "new" | "in_progress" | "waiting_customer" | "resolved";
 type ServicePriority = "low" | "normal" | "high" | "urgent";
+type ChannelHealth = "checking" | "connected" | "connecting" | "disconnected" | "unknown";
 
 type InboxSettings = {
   organization_id: string;
@@ -243,6 +244,7 @@ export default function WhatsAppInbox({
   const [tagSaving, setTagSaving] = useState(false);
   const [availableLeads, setAvailableLeads] = useState<LeadSummary[]>([]);
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
+  const [channelHealth, setChannelHealth] = useState<ChannelHealth>("checking");
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [newChatName, setNewChatName] = useState("");
   const [newChatPhone, setNewChatPhone] = useState("");
@@ -406,6 +408,33 @@ export default function WhatsAppInbox({
     setConversations(rows);
   }, [organizationId]);
 
+  const checkChannelHealth = useCallback(async () => {
+    if (!supabase || !activeChannelId) {
+      setChannelHealth(activeChannelId ? "unknown" : "disconnected");
+      return;
+    }
+
+    const session = await supabase.auth.getSession();
+    const token = session.data.session?.access_token;
+    if (!token) {
+      setChannelHealth("unknown");
+      return;
+    }
+
+    const { data, error } = await supabase.functions.invoke("whatsapp-channel-health", {
+      body: { channel_id: activeChannelId },
+      headers: { Authorization: "Bearer " + token },
+    });
+
+    if (error || !data?.ok) {
+      setChannelHealth("unknown");
+      return;
+    }
+
+    const next = String(data.state || "unknown") as ChannelHealth;
+    setChannelHealth(["connected", "connecting", "disconnected", "unknown"].includes(next) ? next : "unknown");
+  }, [activeChannelId]);
+
   const loadMessages = useCallback(async (id: string) => {
     if (!supabase) return;
     const { data } = await supabase
@@ -478,6 +507,18 @@ export default function WhatsAppInbox({
     const timer = setInterval(() => setNowTick(Date.now()), 60000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!activeChannelId) {
+      setChannelHealth("disconnected");
+      return;
+    }
+
+    setChannelHealth("checking");
+    void checkChannelHealth();
+    const timer = setInterval(() => void checkChannelHealth(), 60000);
+    return () => clearInterval(timer);
+  }, [activeChannelId, checkChannelHealth]);
 
   useEffect(() => {
     const missing = conversations.filter((conversation) => !conversation.contact_avatar_url).slice(0, 5);
@@ -1302,7 +1343,10 @@ export default function WhatsAppInbox({
       <aside className="wa-list">
         <div className="wa-mobile-topbar">
           <button type="button" className="wa-mobile-menu" onClick={onOpenMenu} aria-label="Abrir menu do CRM">☰</button>
-          <strong>WhatsApp</strong>
+          <span className="wa-mobile-title">
+            <strong>WhatsApp</strong>
+            <i className={"wa-health-dot " + channelHealth} title={"Canal " + channelHealth} />
+          </span>
           <span className="wa-mobile-top-actions">
             {canManageSla && (
               <button type="button" className="wa-mobile-sla" onClick={() => setSlaSettingsOpen(true)} aria-label="Configurar SLA" title="Configurar SLA">⏱</button>
@@ -1315,6 +1359,23 @@ export default function WhatsAppInbox({
           <div>
             <h2>Conversas</h2>
             <small>{conversations.filter((item) => item.status !== "archived").reduce((count, item) => count + item.unread_count, 0)} não lidas</small>
+            <button
+              type="button"
+              className={"wa-channel-health " + channelHealth}
+              onClick={() => void checkChannelHealth()}
+              title="Verificar conexão do WhatsApp"
+            >
+              <i />
+              {channelHealth === "connected"
+                ? "Conectado"
+                : channelHealth === "connecting"
+                  ? "Conectando"
+                  : channelHealth === "disconnected"
+                    ? "Desconectado"
+                    : channelHealth === "checking"
+                      ? "Verificando"
+                      : "Status indisponível"}
+            </button>
           </div>
           <div className="wa-list-head-actions">
             {canManageSla && (
@@ -1694,6 +1755,13 @@ export default function WhatsAppInbox({
               })}
               <div ref={messagesEndRef} />
             </div>
+
+            {channelHealth === "disconnected" && selected.status !== "archived" && (
+              <div className="wa-channel-warning">
+                <span>WhatsApp desconectado. As mensagens podem não ser enviadas até a sessão voltar.</span>
+                <button type="button" onClick={() => void checkChannelHealth()}>Verificar novamente</button>
+              </div>
+            )}
 
             {selected.status === "archived" ? (
               <div className="wa-archived-banner">
