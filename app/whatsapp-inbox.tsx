@@ -24,6 +24,15 @@ type WhatsAppTag = {
   color: string;
 };
 
+type QuickReply = {
+  id: string;
+  title: string;
+  shortcut: string;
+  body: string;
+  is_active: boolean;
+  sort_order: number;
+};
+
 type InternalNote = {
   id: string;
   conversation_id: string;
@@ -261,6 +270,15 @@ export default function WhatsAppInbox({
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+  const [quickReplyOpen, setQuickReplyOpen] = useState(false);
+  const [quickReplyTitle, setQuickReplyTitle] = useState("");
+  const [quickReplyShortcut, setQuickReplyShortcut] = useState("");
+  const [quickReplyBody, setQuickReplyBody] = useState("");
+  const [quickReplySaving, setQuickReplySaving] = useState(false);
+  const [messageSearchOpen, setMessageSearchOpen] = useState(false);
+  const [messageSearch, setMessageSearch] = useState("");
+  const [messageSearchIndex, setMessageSearchIndex] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -282,6 +300,7 @@ export default function WhatsAppInbox({
       { data: tagData },
       { data: conversationTagData },
       { data: inboxSettingsData },
+      { data: quickReplyData },
       userResult,
     ] = await Promise.all([
       supabase
@@ -323,6 +342,13 @@ export default function WhatsAppInbox({
         .select("organization_id,sla_low_minutes,sla_normal_minutes,sla_high_minutes,sla_urgent_minutes")
         .eq("organization_id", organizationId)
         .maybeSingle(),
+      supabase
+        .from("whatsapp_quick_replies")
+        .select("id,title,shortcut,body,is_active,sort_order")
+        .eq("organization_id", organizationId)
+        .eq("is_active", true)
+        .order("sort_order")
+        .order("title"),
       supabase.auth.getUser(),
     ]);
 
@@ -332,6 +358,7 @@ export default function WhatsAppInbox({
     setAvailableLeads(leads);
     setActiveChannelId(channelData?.id || null);
     setCurrentUserId(userResult.data.user?.id || null);
+    setQuickReplies((quickReplyData || []) as QuickReply[]);
 
     if (inboxSettingsData) {
       const settings = inboxSettingsData as InboxSettings;
@@ -443,7 +470,7 @@ export default function WhatsAppInbox({
       .eq("organization_id", organizationId)
       .eq("conversation_id", id)
       .order("created_at", { ascending: true })
-      .limit(300);
+      .limit(1000);
 
     const rows = (data || []) as Message[];
     setMessages(rows);
@@ -567,6 +594,10 @@ export default function WhatsAppInbox({
       setEmojiOpen(false);
       setNotesOpen(false);
       setTagMenuOpen(false);
+      setQuickReplyOpen(false);
+      setMessageSearchOpen(false);
+      setMessageSearch("");
+      setMessageSearchIndex(0);
       return;
     }
     void loadMessages(selectedId);
@@ -636,6 +667,11 @@ export default function WhatsAppInbox({
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "whatsapp_inbox_settings", filter: "organization_id=eq." + organizationId },
+        () => void loadConversations(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "whatsapp_quick_replies", filter: "organization_id=eq." + organizationId },
         () => void loadConversations(),
       )
       .subscribe();
@@ -814,6 +850,50 @@ export default function WhatsAppInbox({
   const selected = conversations.find((item) => item.id === selectedId) || null;
   const currentMember = teamMembers.find((member) => member.user_id === currentUserId) || null;
   const canManageSla = ["owner", "admin", "manager"].includes(currentMember?.role || "");
+  const canManageQuickReplies = ["owner", "admin", "manager"].includes(currentMember?.role || "");
+
+  const messageSearchMatches = useMemo(() => {
+    const query = messageSearch.trim().toLowerCase();
+    if (!query) return [] as Message[];
+    return messages.filter((message) =>
+      [message.body, message.media_filename, message.message_type]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [messages, messageSearch]);
+
+  useEffect(() => {
+    setMessageSearchIndex(0);
+  }, [messageSearch, selectedId]);
+
+  const goToSearchResult = useCallback((index: number) => {
+    if (!messageSearchMatches.length) return;
+    const normalized = ((index % messageSearchMatches.length) + messageSearchMatches.length) % messageSearchMatches.length;
+    setMessageSearchIndex(normalized);
+    requestAnimationFrame(() => {
+      document.getElementById("wa-message-" + messageSearchMatches[normalized].id)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
+  }, [messageSearchMatches]);
+
+  const expandQuickReply = (body: string) =>
+    body
+      .replaceAll("{{nome}}", selected?.lead?.name || selected?.contact_name || selected?.contact_phone || "")
+      .replaceAll("{{empresa}}", selected?.lead?.company_name || "")
+      .replaceAll("{{responsavel}}", currentMember?.full_name || "");
+
+  const filteredQuickReplies = useMemo(() => {
+    const slash = draft.trim().startsWith("/") ? draft.trim().toLowerCase() : "";
+    if (!slash) return quickReplies;
+    return quickReplies.filter((reply) =>
+      reply.shortcut.toLowerCase().startsWith(slash) ||
+      reply.title.toLowerCase().includes(slash.slice(1)),
+    );
+  }, [quickReplies, draft]);
 
   const getSlaLimitMinutes = useCallback((priority: ServicePriority) => {
     if (!inboxSettings) {
@@ -1088,6 +1168,62 @@ export default function WhatsAppInbox({
 
     await loadConversations();
     setTagSaving(false);
+  };
+
+  const createQuickReply = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!supabase || !currentUserId || !canManageQuickReplies || quickReplySaving) return;
+
+    const title = quickReplyTitle.trim();
+    let shortcut = quickReplyShortcut.trim().toLowerCase();
+    const body = quickReplyBody.trim();
+    if (!shortcut.startsWith("/")) shortcut = "/" + shortcut;
+    shortcut = shortcut.replace(/[^/a-z0-9_-]/g, "");
+
+    if (!title || !body || !/^\/[a-z0-9_-]{1,32}$/.test(shortcut)) {
+      setSendError("Informe título, mensagem e um atalho válido, como /orcamento.");
+      return;
+    }
+
+    setQuickReplySaving(true);
+    const { error } = await supabase.from("whatsapp_quick_replies").insert({
+      organization_id: organizationId,
+      title,
+      shortcut,
+      body,
+      created_by: currentUserId,
+    });
+
+    if (error) {
+      setSendError(error.code === "23505" ? "Esse atalho já existe." : "Não foi possível criar a resposta rápida.");
+      setQuickReplySaving(false);
+      return;
+    }
+
+    setQuickReplyTitle("");
+    setQuickReplyShortcut("");
+    setQuickReplyBody("");
+    setQuickReplySaving(false);
+    await loadConversations();
+  };
+
+  const deleteQuickReply = async (replyId: string) => {
+    if (!supabase || !canManageQuickReplies || quickReplySaving) return;
+    setQuickReplySaving(true);
+    const { error } = await supabase
+      .from("whatsapp_quick_replies")
+      .delete()
+      .eq("organization_id", organizationId)
+      .eq("id", replyId);
+    if (error) setSendError("Não foi possível excluir a resposta rápida.");
+    setQuickReplySaving(false);
+    await loadConversations();
+  };
+
+  const useQuickReply = (reply: QuickReply) => {
+    setDraft(expandQuickReply(reply.body));
+    setQuickReplyOpen(false);
+    setEmojiOpen(false);
   };
 
   const updateServicePriority = async (nextPriority: ServicePriority) => {
@@ -1541,6 +1677,15 @@ export default function WhatsAppInbox({
               ) : null}
               <button
                 type="button"
+                className={"wa-chat-search-toggle " + (messageSearchOpen ? "active" : "")}
+                onClick={() => setMessageSearchOpen((value) => !value)}
+                title="Buscar nesta conversa"
+                aria-label="Buscar nesta conversa"
+              >
+                ⌕
+              </button>
+              <button
+                type="button"
                 className="wa-archive-action"
                 onClick={() => void toggleConversationArchive()}
                 title={selected.status === "archived" ? "Reabrir conversa" : "Arquivar conversa"}
@@ -1548,6 +1693,28 @@ export default function WhatsAppInbox({
                 {selected.status === "archived" ? "Reabrir" : "Arquivar"}
               </button>
             </header>
+
+            {messageSearchOpen && (
+              <div className="wa-message-search">
+                <span>⌕</span>
+                <input
+                  value={messageSearch}
+                  onChange={(event) => setMessageSearch(event.target.value)}
+                  placeholder="Buscar texto ou arquivo nesta conversa"
+                  autoFocus
+                />
+                <small>
+                  {messageSearch.trim()
+                    ? messageSearchMatches.length
+                      ? (messageSearchIndex + 1) + "/" + messageSearchMatches.length
+                      : "0 resultados"
+                    : "Digite para buscar"}
+                </small>
+                <button type="button" onClick={() => goToSearchResult(messageSearchIndex - 1)} disabled={!messageSearchMatches.length} title="Resultado anterior">↑</button>
+                <button type="button" onClick={() => goToSearchResult(messageSearchIndex + 1)} disabled={!messageSearchMatches.length} title="Próximo resultado">↓</button>
+                <button type="button" onClick={() => { setMessageSearchOpen(false); setMessageSearch(""); }} title="Fechar busca">×</button>
+              </div>
+            )}
 
             <div className="wa-service-status-bar">
               <span>Status do atendimento</span>
@@ -1747,7 +1914,14 @@ export default function WhatsAppInbox({
                 return (
                   <Fragment key={message.id}>
                     {showDay && <div className="wa-day-divider"><span>{fmtMessageDay(message.created_at)}</span></div>}
-                    <article className={"wa-bubble " + message.direction}>
+                    <article
+                      id={"wa-message-" + message.id}
+                      className={
+                        "wa-bubble " + message.direction +
+                        (messageSearchMatches.some((item) => item.id === message.id) ? " search-match" : "") +
+                        (messageSearchMatches[messageSearchIndex]?.id === message.id && messageSearch.trim() ? " search-current" : "")
+                      }
+                    >
                       {renderMessageContent(message)}
                     </article>
                   </Fragment>
@@ -1823,6 +1997,60 @@ export default function WhatsAppInbox({
 
               {(recordingError || sendError) && <p className="wa-send-error">{recordingError || sendError}</p>}
 
+              {quickReplyOpen && (
+                <div className="wa-quick-replies" role="dialog" aria-label="Respostas rápidas">
+                  <header>
+                    <div>
+                      <strong>Respostas rápidas</strong>
+                      <small>Use um atalho como /orcamento ou toque na resposta.</small>
+                    </div>
+                    <button type="button" onClick={() => setQuickReplyOpen(false)} aria-label="Fechar">×</button>
+                  </header>
+                  <div className="wa-quick-reply-list">
+                    {filteredQuickReplies.length ? filteredQuickReplies.map((reply) => (
+                      <div key={reply.id} className="wa-quick-reply-item">
+                        <button type="button" onClick={() => useQuickReply(reply)}>
+                          <span><strong>{reply.title}</strong><i>{reply.shortcut}</i></span>
+                          <small>{reply.body}</small>
+                        </button>
+                        {canManageQuickReplies && (
+                          <button
+                            type="button"
+                            className="wa-quick-reply-delete"
+                            onClick={() => void deleteQuickReply(reply.id)}
+                            disabled={quickReplySaving}
+                            title="Excluir resposta rápida"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    )) : (
+                      <div className="wa-quick-reply-empty">Nenhuma resposta rápida encontrada.</div>
+                    )}
+                  </div>
+                  {canManageQuickReplies && (
+                    <form className="wa-quick-reply-create" onSubmit={createQuickReply}>
+                      <strong>Nova resposta</strong>
+                      <div>
+                        <input value={quickReplyTitle} onChange={(event) => setQuickReplyTitle(event.target.value)} placeholder="Título" maxLength={80} />
+                        <input value={quickReplyShortcut} onChange={(event) => setQuickReplyShortcut(event.target.value)} placeholder="/atalho" maxLength={33} />
+                      </div>
+                      <textarea
+                        value={quickReplyBody}
+                        onChange={(event) => setQuickReplyBody(event.target.value)}
+                        placeholder="Mensagem. Variáveis: {{nome}}, {{empresa}}, {{responsavel}}"
+                        maxLength={4096}
+                        rows={3}
+                      />
+                      <button type="submit" disabled={quickReplySaving || !quickReplyTitle.trim() || !quickReplyShortcut.trim() || !quickReplyBody.trim()}>
+                        {quickReplySaving ? "Salvando…" : "Criar resposta rápida"}
+                      </button>
+                    </form>
+                  )}
+                </div>
+              )}
+
               {emojiOpen && (
                 <div className="wa-emoji-picker" role="dialog" aria-label="Selecionar emoji">
                   {commonEmojis.map((emoji) => (
@@ -1859,6 +2087,16 @@ export default function WhatsAppInbox({
                 />
 
                 <button type="button" className="wa-attach" onClick={() => fileInputRef.current?.click()} disabled={sending || recording} title="Anexar arquivo">＋</button>
+                <button
+                  type="button"
+                  className={"wa-quick-reply-trigger " + (quickReplyOpen ? "active" : "")}
+                  onClick={() => { setQuickReplyOpen((value) => !value); setEmojiOpen(false); }}
+                  disabled={sending || recording}
+                  title="Respostas rápidas"
+                  aria-label="Respostas rápidas"
+                >
+                  ⚡
+                </button>
 
                 <div className="wa-message-field">
                   <button
@@ -1873,7 +2111,14 @@ export default function WhatsAppInbox({
                   </button>
                   <input
                     value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setDraft(value);
+                      if (value.trim().startsWith("/")) {
+                        setQuickReplyOpen(true);
+                        setEmojiOpen(false);
+                      }
+                    }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey) {
                         event.preventDefault();
