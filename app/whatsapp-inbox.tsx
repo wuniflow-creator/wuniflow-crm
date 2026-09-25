@@ -11,6 +11,13 @@ type LeadSummary = {
   phone: string | null;
   pipeline_stages: { name: string; color: string | null } | null;
 };
+type TeamMember = {
+  user_id: string;
+  role: string;
+  full_name: string;
+  avatar_url: string | null;
+};
+
 type Conversation = {
   id: string;
   contact_name: string | null;
@@ -18,6 +25,8 @@ type Conversation = {
   contact_avatar_url: string | null;
   lead_id: string | null;
   lead: LeadSummary | null;
+  assigned_to: string | null;
+  assignee: TeamMember | null;
   last_message_at: string | null;
   last_message_preview: string | null;
   unread_count: number;
@@ -148,7 +157,10 @@ export default function WhatsAppInbox({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [search, setSearch] = useState("");
-  const [conversationFilter, setConversationFilter] = useState<"all" | "unread" | "leads" | "archived">("all");
+  const [conversationFilter, setConversationFilter] = useState<"all" | "mine" | "unread" | "leads" | "archived">("all");
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [assigningConversation, setAssigningConversation] = useState(false);
   const [availableLeads, setAvailableLeads] = useState<LeadSummary[]>([]);
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
@@ -184,10 +196,12 @@ export default function WhatsAppInbox({
       { data: conversationData, error: conversationError },
       { data: leadData },
       { data: channelData },
+      { data: memberData },
+      userResult,
     ] = await Promise.all([
       supabase
         .from("whatsapp_conversations")
-        .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,last_message_at,last_message_preview,unread_count,status")
+        .select("id,contact_name,contact_phone,contact_avatar_url,lead_id,assigned_to,last_message_at,last_message_preview,unread_count,status")
         .eq("organization_id", organizationId)
         .order("last_message_at", { ascending: false, nullsFirst: false }),
       supabase
@@ -204,6 +218,12 @@ export default function WhatsAppInbox({
         .eq("is_active", true)
         .limit(1)
         .maybeSingle(),
+      supabase
+        .from("organization_members")
+        .select("user_id,role")
+        .eq("organization_id", organizationId)
+        .eq("is_active", true),
+      supabase.auth.getUser(),
     ]);
 
     if (conversationError) return;
@@ -211,6 +231,36 @@ export default function WhatsAppInbox({
     const leads = (leadData || []) as unknown as LeadSummary[];
     setAvailableLeads(leads);
     setActiveChannelId(channelData?.id || null);
+    setCurrentUserId(userResult.data.user?.id || null);
+
+    const memberRows = (memberData || []) as { user_id: string; role: string }[];
+    const memberIds = memberRows.map((member) => member.user_id);
+    let members: TeamMember[] = [];
+    if (memberIds.length) {
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("id,full_name,avatar_url,is_active")
+        .in("id", memberIds)
+        .eq("is_active", true);
+
+      const profileMap = new Map(
+        (profileData || []).map((profile) => [profile.id, profile]),
+      );
+      members = memberRows
+        .map((member) => {
+          const profile = profileMap.get(member.user_id);
+          return {
+            user_id: member.user_id,
+            role: member.role,
+            full_name: profile?.full_name || "Usuário",
+            avatar_url: profile?.avatar_url || null,
+          };
+        })
+        .sort((a, b) => a.full_name.localeCompare(b.full_name, "pt-BR"));
+    }
+    setTeamMembers(members);
+    const memberById = new Map(members.map((member) => [member.user_id, member]));
+
     const leadById = new Map(leads.map((lead) => [lead.id, lead]));
     const phoneMatches = new Map<string, LeadSummary | null>();
 
@@ -222,12 +272,13 @@ export default function WhatsAppInbox({
       }
     }
 
-    const rows = ((conversationData || []) as Omit<Conversation, "lead">[]).map((conversation) => ({
+    const rows = ((conversationData || []) as Omit<Conversation, "lead" | "assignee">[]).map((conversation) => ({
       ...conversation,
       lead:
         (conversation.lead_id ? leadById.get(conversation.lead_id) || null : null) ||
         phoneMatches.get(normalizePhone(conversation.contact_phone)) ||
         null,
+      assignee: conversation.assigned_to ? memberById.get(conversation.assigned_to) || null : null,
     }));
 
     setConversations(rows);
@@ -588,6 +639,7 @@ export default function WhatsAppInbox({
           contact_phone: phone,
           lead_id: matchedLead?.id || null,
           channel_id: activeChannelId,
+          assigned_to: currentUserId,
           updated_at: new Date().toISOString(),
         })
         .eq("id", conversationId)
@@ -610,6 +662,7 @@ export default function WhatsAppInbox({
           provider: "whatsapp",
           provider_conversation_id: providerConversationId,
           status: "open",
+          assigned_to: currentUserId,
           metadata: { source: "crm_new_conversation" },
         })
         .select("id")
@@ -631,6 +684,51 @@ export default function WhatsAppInbox({
     await loadConversations();
     setConversationFilter("all");
     setSelectedId(conversationId);
+  };
+
+  const assignConversation = async (userId: string | null) => {
+    if (!supabase || !selected || assigningConversation) return;
+    setAssigningConversation(true);
+    setSendError(null);
+
+    const { error } = await supabase
+      .from("whatsapp_conversations")
+      .update({ assigned_to: userId, updated_at: new Date().toISOString() })
+      .eq("id", selected.id)
+      .eq("organization_id", organizationId);
+
+    if (error) {
+      setSendError("Não foi possível alterar o responsável.");
+      setAssigningConversation(false);
+      return;
+    }
+
+    if (selected.lead_id && currentUserId) {
+      const nextMember = userId ? teamMembers.find((member) => member.user_id === userId) || null : null;
+      await supabase.from("lead_activities").insert({
+        organization_id: organizationId,
+        lead_id: selected.lead_id,
+        activity_type: "assignment",
+        title: "Responsável do WhatsApp alterado",
+        description: nextMember ? "Atendimento atribuído a " + nextMember.full_name + "." : "Atendimento ficou sem responsável.",
+        occurred_at: new Date().toISOString(),
+        created_by: currentUserId,
+      });
+    }
+
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === selected.id
+          ? {
+              ...conversation,
+              assigned_to: userId,
+              assignee: userId ? teamMembers.find((member) => member.user_id === userId) || null : null,
+            }
+          : conversation,
+      ),
+    );
+    setAssigningConversation(false);
+    await loadConversations();
   };
 
   const toggleConversationArchive = async () => {
@@ -662,6 +760,7 @@ export default function WhatsAppInbox({
       } else if (item.status === "archived") {
         return false;
       }
+      if (conversationFilter === "mine" && item.assigned_to !== currentUserId) return false;
       if (conversationFilter === "unread" && item.unread_count <= 0) return false;
       if (conversationFilter === "leads" && !item.lead) return false;
       if (!query) return true;
@@ -672,13 +771,14 @@ export default function WhatsAppInbox({
         item.lead?.name,
         item.lead?.company_name,
         item.lead?.pipeline_stages?.name,
+        item.assignee?.full_name,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
         .includes(query);
     });
-  }, [conversations, search, conversationFilter]);
+  }, [conversations, search, conversationFilter, currentUserId]);
 
   const previewIcon = (conversation: Conversation) => {
     const preview = conversation.last_message_preview || "Sem mensagens";
@@ -760,6 +860,7 @@ export default function WhatsAppInbox({
 
         <div className="wa-filters" aria-label="Filtros de conversas">
           <button className={conversationFilter === "all" ? "active" : ""} onClick={() => setConversationFilter("all")}>Todas</button>
+          <button className={conversationFilter === "mine" ? "active" : ""} onClick={() => setConversationFilter("mine")}>Minhas</button>
           <button className={conversationFilter === "unread" ? "active" : ""} onClick={() => setConversationFilter("unread")}>Não lidas</button>
           <button className={conversationFilter === "leads" ? "active" : ""} onClick={() => setConversationFilter("leads")}>Leads</button>
           <button className={conversationFilter === "archived" ? "active" : ""} onClick={() => setConversationFilter("archived")}>Arquivadas</button>
@@ -785,6 +886,9 @@ export default function WhatsAppInbox({
                       <small>{previewIcon(conversation)}</small>
                       {conversation.unread_count > 0 && <b>{conversation.unread_count}</b>}
                     </span>
+                    {conversation.assignee && (
+                      <span className="wa-assignee-context">👤 {conversation.assignee.full_name}</span>
+                    )}
                     {conversation.lead && (
                       <span
                         className="wa-lead-context"
@@ -850,6 +954,37 @@ export default function WhatsAppInbox({
                 {selected.status === "archived" ? "Reabrir" : "Arquivar"}
               </button>
             </header>
+
+            <div className="wa-assignment-bar">
+              <div className="wa-assignment-copy">
+                <span>Responsável</span>
+                <strong>{selected.assignee?.full_name || "Sem responsável"}</strong>
+              </div>
+              <div className="wa-assignment-actions">
+                {!selected.assigned_to && currentUserId && (
+                  <button
+                    type="button"
+                    onClick={() => void assignConversation(currentUserId)}
+                    disabled={assigningConversation}
+                  >
+                    Assumir
+                  </button>
+                )}
+                <select
+                  value={selected.assigned_to || ""}
+                  onChange={(event) => void assignConversation(event.target.value || null)}
+                  disabled={assigningConversation}
+                  aria-label="Responsável pela conversa"
+                >
+                  <option value="">Sem responsável</option>
+                  {teamMembers.map((member) => (
+                    <option key={member.user_id} value={member.user_id}>
+                      {member.full_name}{member.user_id === currentUserId ? " (você)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
             <div className="wa-messages">
               {messages.map((message, index) => {
