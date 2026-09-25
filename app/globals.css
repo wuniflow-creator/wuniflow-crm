@@ -2192,3 +2192,86 @@
   .wa-queue-summary button strong{font-size:11px}
   .wa-queue-summary button span{font-size:6px}
 }
+
+
+/* WhatsApp live channel health */
+.wa-mobile-title{
+  display:flex;
+  align-items:center;
+  gap:7px;
+}
+.wa-health-dot,
+.wa-channel-health i{
+  width:7px;
+  height:7px;
+  flex:0 0 7px;
+  border-radius:50%;
+  background:#737b84;
+}
+.wa-health-dot.connected,
+.wa-channel-health.connected i{background:#4ac786}
+.wa-health-dot.connecting,
+.wa-channel-health.connecting i{background:#d9a84f}
+.wa-health-dot.disconnected,
+.wa-channel-health.disconnected i{background:#e06472}
+.wa-health-dot.checking,
+.wa-channel-health.checking i{background:#7d8792}
+.wa-channel-health{
+  width:max-content;
+  min-height:20px;
+  display:flex;
+  align-items:center;
+  gap:5px;
+  margin-top:3px;
+  padding:1px 5px;
+  border:0;
+  border-radius:999px;
+  background:transparent;
+  color:#7f8790;
+  box-shadow:none;
+  font-size:6px;
+  font-weight:700;
+}
+.wa-channel-health:hover{
+  background:#22272d;
+  filter:none;
+}
+.wa-channel-health.connected{color:#77d7a8}
+.wa-channel-health.connecting{color:#e4bd70}
+.wa-channel-health.disconnected{color:#ed8c97}
+.wa-channel-warning{
+  min-height:43px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:7px 11px;
+  border-bottom:1px solid #5c3038;
+  background:#2b1c20;
+  color:#eeb0b8;
+  font-size:8px;
+}
+.wa-channel-warning button{
+  flex:0 0 auto;
+  min-height:29px;
+  padding:4px 8px;
+  border:1px solid #6e3943;
+  border-radius:8px;
+  background:#392128;
+  color:#ffc2ca;
+  box-shadow:none;
+  font-size:7px;
+  font-weight:700;
+}
+.wa-channel-warning button:hover{filter:none;background:#482831}
+@media(max-width:900px){
+  .wa-channel-warning{
+    padding:6px 8px;
+    font-size:7px;
+  }
+  .wa-channel-warning button{
+    min-height:27px;
+    padding:4px 7px;
+    font-size:6px;
+  }
+}
