@@ -76,6 +76,20 @@ const messageStatusTitle = (message: Message) => {
   return "Enviada";
 };
 
+const formatBytes = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
+  if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1) + " MB";
+};
+
+const attachmentKind = (file: File) => {
+  const mime = (file.type || "").toLowerCase();
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
+  return "document";
+};
+
 const documentLabel = (mime: string | null) => {
   if (mime === "application/pdf") return "PDF";
   if (mime?.includes("word")) return "DOC";
@@ -132,6 +146,7 @@ export default function WhatsAppInbox({
   const [sendError, setSendError] = useState<string | null>(null);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const [attachment, setAttachment] = useState<File | null>(null);
+  const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [recordingError, setRecordingError] = useState<string | null>(null);
@@ -263,6 +278,23 @@ export default function WhatsAppInbox({
     },
     [],
   );
+
+  useEffect(() => {
+    if (!attachment) {
+      setAttachmentPreviewUrl(null);
+      return;
+    }
+
+    const kind = attachmentKind(attachment);
+    if (kind !== "image" && kind !== "video") {
+      setAttachmentPreviewUrl(null);
+      return;
+    }
+
+    const url = URL.createObjectURL(attachment);
+    setAttachmentPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [attachment]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -681,15 +713,42 @@ export default function WhatsAppInbox({
               )}
 
               {attachment && (
-                <div className="wa-attachment">
-                  <span>{attachment.type.startsWith("audio/") ? "🎙️" : "📎"} {attachment.name}</span>
+                <div className={"wa-attachment wa-attachment-" + attachmentKind(attachment)}>
+                  {attachmentPreviewUrl && attachmentKind(attachment) === "image" && (
+                    <img className="wa-attachment-preview" src={attachmentPreviewUrl} alt="" />
+                  )}
+                  {attachmentPreviewUrl && attachmentKind(attachment) === "video" && (
+                    <video className="wa-attachment-preview" src={attachmentPreviewUrl} muted playsInline />
+                  )}
+                  {!attachmentPreviewUrl && (
+                    <span className="wa-attachment-type">
+                      {attachmentKind(attachment) === "audio" ? "🎙️" : attachment.type === "application/pdf" ? "PDF" : "📄"}
+                    </span>
+                  )}
+                  <span className="wa-attachment-copy">
+                    <strong>{attachment.name}</strong>
+                    <small>
+                      {attachmentKind(attachment) === "image"
+                        ? "Imagem"
+                        : attachmentKind(attachment) === "video"
+                          ? "Vídeo"
+                          : attachmentKind(attachment) === "audio"
+                            ? "Áudio"
+                            : attachment.type === "application/pdf"
+                              ? "PDF"
+                              : "Documento"} · {formatBytes(attachment.size)}
+                    </small>
+                  </span>
                   <button
                     type="button"
+                    className="wa-attachment-remove"
                     onClick={() => {
                       setAttachment(null);
                       setRecordingError(null);
                       if (fileInputRef.current) fileInputRef.current.value = "";
                     }}
+                    aria-label="Remover anexo"
+                    title="Remover anexo"
                   >
                     ×
                   </button>
@@ -720,8 +779,16 @@ export default function WhatsAppInbox({
                   type="file"
                   accept="image/jpeg,image/png,image/webp,video/mp4,audio/ogg,audio/mpeg,audio/mp4,audio/webm,application/pdf,text/plain,.doc,.docx,.xls,.xlsx"
                   onChange={(event) => {
-                    setAttachment(event.target.files?.[0] || null);
+                    const file = event.target.files?.[0] || null;
+                    setSendError(null);
                     setRecordingError(null);
+                    if (file && file.size > 25 * 1024 * 1024) {
+                      setAttachment(null);
+                      setSendError("O anexo deve ter no máximo 25 MB.");
+                      event.currentTarget.value = "";
+                      return;
+                    }
+                    setAttachment(file);
                   }}
                 />
 
