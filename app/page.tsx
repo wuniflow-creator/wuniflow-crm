@@ -9,6 +9,11 @@ type SessionState = "loading" | "signed_out" | "ready" | "no_access";
 type View = "overview" | "leads" | "kanban" | "tasks" | "activities" | "whatsapp";
 type ActivityFeedItem = LeadActivity & { lead_id: string; leads: Pick<Lead, "name" | "company_name"> | null };
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
+
 const formatDate = (value: string | null) =>
   value ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "—";
 
@@ -54,6 +59,9 @@ export default function Home() {
   const [isSavingLead, setIsSavingLead] = useState(false);
   const [activityNote, setActivityNote] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [initialWhatsAppConversationId, setInitialWhatsAppConversationId] = useState<string | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isStandalone, setIsStandalone] = useState(false);
   const [draggedLeadId, setDraggedLeadId] = useState<string | null>(null);
   const [movingLeadId, setMovingLeadId] = useState<string | null>(null);
 
@@ -101,6 +109,55 @@ export default function Home() {
       return;
     }
     void loadCrm();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if ("serviceWorker" in navigator) {
+      void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => undefined);
+    }
+
+    const navigatorWithStandalone = navigator as Navigator & { standalone?: boolean };
+    setIsStandalone(
+      window.matchMedia("(display-mode: standalone)").matches ||
+      navigatorWithStandalone.standalone === true,
+    );
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("view") === "whatsapp") setView("whatsapp");
+    const conversationId = params.get("conversation");
+    if (conversationId) setInitialWhatsAppConversationId(conversationId);
+
+    const handleBeforeInstall = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    const handleInstalled = () => {
+      setInstallPrompt(null);
+      setIsStandalone(true);
+    };
+    const handleServiceWorkerMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; conversationId?: string } | null;
+      if (!data?.type) return;
+      if (data.type === "OPEN_WHATSAPP" || data.type === "OPEN_WHATSAPP_CONVERSATION") {
+        setView("whatsapp");
+        setMobileMenuOpen(false);
+      }
+      if (data.type === "OPEN_WHATSAPP_CONVERSATION" && data.conversationId) {
+        setInitialWhatsAppConversationId(data.conversationId);
+      }
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstall);
+    window.addEventListener("appinstalled", handleInstalled);
+    navigator.serviceWorker?.addEventListener("message", handleServiceWorkerMessage);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
+      window.removeEventListener("appinstalled", handleInstalled);
+      navigator.serviceWorker?.removeEventListener("message", handleServiceWorkerMessage);
+    };
   }, []);
 
   const stats = useMemo(() => ({
@@ -344,7 +401,27 @@ export default function Home() {
     setIsLoadingActivities(false);
   };
 
+  const installPwa = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+    if (choice.outcome === "accepted") setInstallPrompt(null);
+  };
+
   const signOut = async () => {
+    if (supabase && typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager?.getSubscription();
+        if (subscription) {
+          await supabase.from("web_push_subscriptions").delete().eq("endpoint", subscription.endpoint);
+          await subscription.unsubscribe();
+        }
+      } catch {
+        // Logout must continue even if push cleanup is unavailable.
+      }
+    }
+
     await supabase?.auth.signOut();
     setLeads([]);
     setSelectedLead(null);
@@ -367,8 +444,10 @@ export default function Home() {
 
   const leadRows = filteredLeads.map((lead) => <tr key={lead.id}><td><strong>{lead.name}</strong><small>{lead.company_name || "Empresa não informada"} · {lead.source || "Origem não informada"}</small></td><td><span className="stage"><i style={{ background: lead.pipeline_stages?.color || "#94a3b8" }} />{lead.pipeline_stages?.name || "Sem etapa"}</span></td><td><span className={`priority ${lead.priority}`}>{lead.priority}</span></td><td><strong>{lead.next_action_title || "Revisar contexto e assumir contato"}</strong><small>{formatDate(lead.next_action_at || lead.last_contact_at)}</small></td><td className="actions"><button className="view-button" onClick={() => void openLead(lead)}>Ver contexto</button>{lead.whatsapp && <a className="whatsapp" href={toWhatsApp(lead.whatsapp)} target="_blank" rel="noreferrer">WhatsApp ↗</a>}</td></tr>);
 
-  return <main className={"shell "+(view==="whatsapp"?"whatsapp-mode":"")}><aside className={mobileMenuOpen ? "open" : ""}><div className="brand"><span className="mark">W</span><div><strong>WUNIFLOW</strong><small>AUTOMATIONS</small></div></div><nav><button className={view === "overview" ? "active" : ""} onClick={() => { setView("overview"); setMobileMenuOpen(false); }}>Visão geral</button><button className={view === "leads" ? "active" : ""} onClick={() => { setView("leads"); setMobileMenuOpen(false); }}>Leads</button><button className={view === "kanban" ? "active" : ""} onClick={() => { setView("kanban"); setMobileMenuOpen(false); }}>Funil</button><button className={view === "tasks" ? "active" : ""} onClick={() => { setView("tasks"); setMobileMenuOpen(false); }}>Tarefas</button><button className={view === "activities" ? "active" : ""} onClick={() => { setView("activities"); setMobileMenuOpen(false); }}>Atividades</button><button className={view === "whatsapp" ? "active" : ""} onClick={() => { setView("whatsapp"); setMobileMenuOpen(false); }}>WhatsApp</button></nav><div className="side-footer"><span>{role}</span><button className="text-button" onClick={signOut}>Sair</button></div></aside>{mobileMenuOpen && <button className="mobile-menu-backdrop" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}<section className={"content "+(view === "whatsapp" ? "whatsapp-page" : "")}><header className={view === "whatsapp" ? "whatsapp-outer-header" : ""}><button className="mobile-menu-button" aria-label="Abrir menu" onClick={() => setMobileMenuOpen(true)}><span /><span /><span /></button><div><p className="eyebrow">OPERAÇÃO COMERCIAL</p><h1>{view === "overview" ? "Visão geral" : view === "leads" ? "Leads" : view === "kanban" ? "Funil comercial" : view === "tasks" ? "Próximas ações" : view === "activities" ? "Atividades" : "WhatsApp"}</h1><p className="muted">{view === "overview" ? "Acompanhe leads, prioridades e próximos passos." : view === "leads" ? "Diagnósticos e conversas qualificadas em um só lugar." : view === "kanban" ? "Movimente oportunidades pelas etapas do processo comercial." : view === "tasks" ? "Organize os retornos comerciais que precisam de atenção." : view === "activities" ? "Histórico recente da operação comercial." : "Conversas recebidas pelo WhatsApp da Wuniflow."}</p></div><button onClick={() => { setNewLeadConversationId(null); setIsNewLeadOpen(true); }}>+ Novo lead</button></header>{view === "overview" ? <><section className="stats"><article><span>Leads abertos</span><strong>{stats.open}</strong></article><article><span>Próximas ações</span><strong>{stats.next}</strong></article><article><span>Prioridade alta</span><strong>{stats.urgent}</strong></article><article><span>Ganhos</span><strong>{stats.won}</strong></article></section><section className="panel"><div className="panel-title"><div><h2>Leads recentes</h2><p>Diagnósticos recebidos e atendimentos em andamento.</p></div><span>{leads.length} registros</span></div>{leads.length === 0 ? <div className="empty"><h3>Ainda não há leads no CRM</h3><p>O próximo diagnóstico confirmado pela landing aparecerá aqui automaticamente.</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Próxima ação</th><th></th></tr></thead><tbody>{leadRows}</tbody></table></div>}</section></> : view === "leads" ? <section className="panel"><div className="panel-title lead-list-heading"><div><h2>Todos os leads</h2><p>Use a busca para localizar empresa, contato, etapa ou telefone.</p></div><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar lead…" /></div>{filteredLeads.length === 0 ? <div className="empty"><h3>Nenhum lead encontrado</h3><p>{leads.length ? "Tente outro termo de busca." : "Os novos diagnósticos serão listados aqui."}</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Última atualização</th><th></th></tr></thead><tbody>{leadRows}</tbody></table></div>}</section> : view === "kanban" ? <section className="kanban-section"><div className="kanban-toolbar"><div><h2>Pipeline comercial</h2><p>Arraste os cards entre as etapas. No celular, use o seletor do card.</p></div><div className="kanban-toolbar-actions"><span>{filteredLeads.length} oportunidades</span><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar no funil…" /></div></div>{leadActionMessage && <p className="kanban-feedback">{leadActionMessage}</p>}<div className="kanban-board">{kanbanColumns.map(({ stage, leads: stageLeads }) => <section key={stage.id} className={"kanban-column "+(stage.stage_type !== "open" ? "terminal" : "")} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => handleKanbanDrop(event, stage.id)}><header><div><i style={{ background: stage.color || "#94a3b8" }} /><strong>{stage.name}</strong></div><b>{stageLeads.length}</b></header><div className="kanban-cards">{stageLeads.length ? stageLeads.map((lead) => <article key={lead.id} className={"kanban-card "+(draggedLeadId === lead.id ? "dragging" : "")+(movingLeadId === lead.id ? " moving" : "")} draggable={movingLeadId !== lead.id} onDragStart={(event) => handleKanbanDragStart(event, lead.id)} onDragEnd={() => setDraggedLeadId(null)}><button type="button" className="kanban-card-main" onClick={() => void openLead(lead)}><span className="kanban-card-top"><strong>{lead.name}</strong><em className={"priority "+lead.priority}>{lead.priority}</em></span><small>{lead.company_name || lead.source || "Sem empresa informada"}</small><span className="kanban-next"><b>{lead.next_action_title || "Definir próxima ação"}</b><small>{formatDate(lead.next_action_at || lead.last_contact_at)}</small></span></button><div className="kanban-card-foot"><span>{lead.whatsapp || "Sem WhatsApp"}</span><label><span>Mover</span><select value={lead.stage_id} disabled={movingLeadId === lead.id} onChange={(event) => void moveLeadStage(lead.id, event.target.value)}>{stages.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label></div></article>) : <div className="kanban-empty">Solte um lead aqui</div>}</div></section>)}</div></section> : view === "tasks" ? <section className="panel"><div className="panel-title"><div><h2>Próximas ações</h2><p>Leads com retorno ou acompanhamento agendado.</p></div><span>{taskLeads.length} pendências</span></div>{taskLeads.length === 0 ? <div className="empty"><h3>Nenhuma ação pendente</h3><p>Defina a próxima ação dentro de um lead para ela aparecer aqui.</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Próxima ação</th><th>Quando</th><th></th></tr></thead><tbody>{taskLeads.map((lead) => <tr key={lead.id}><td><strong>{lead.name}</strong><small>{lead.company_name || "Empresa não informada"}</small></td><td><span className="stage"><i style={{ background: lead.pipeline_stages?.color || "#94a3b8" }} />{lead.pipeline_stages?.name || "Sem etapa"}</span></td><td><strong>{lead.next_action_title || "Revisar contexto e definir próximo passo"}</strong></td><td>{formatDate(lead.next_action_at)}</td><td className="actions"><button className="view-button" onClick={() => void openLead(lead)}>Abrir lead</button></td></tr>)}</tbody></table></div>}</section> : view === "activities" ? <section className="panel"><div className="panel-title"><div><h2>Atividades recentes</h2><p>Notas, handoffs e interações registradas no CRM.</p></div><span>{recentActivities.length} registros</span></div>{recentActivities.length === 0 ? <div className="empty"><h3>Ainda não há atividades</h3><p>As próximas notas e movimentações aparecerão aqui.</p></div> : <div className="activity-feed">{recentActivities.map((activity) => <article key={activity.id}><span>{activityLabel[activity.activity_type]}</span><div><strong>{activity.title}</strong><p>{activity.leads?.name || "Lead não localizado"}{activity.leads?.company_name ? " · " + activity.leads.company_name : ""}</p>{activity.description && <p>{activity.description}</p>}<small>{formatDate(activity.occurred_at)}</small></div><button className="view-button" onClick={() => { const lead = leads.find((item) => item.id === activity.lead_id); if (lead) void openLead(lead); }}>Abrir lead</button></article>)}</div>}</section> : organizationId ? <WhatsAppInbox
+  return <main className={"shell "+(view==="whatsapp"?"whatsapp-mode":"")}><aside className={mobileMenuOpen ? "open" : ""}><div className="brand"><span className="mark">W</span><div><strong>WUNIFLOW</strong><small>AUTOMATIONS</small></div></div><nav><button className={view === "overview" ? "active" : ""} onClick={() => { setView("overview"); setMobileMenuOpen(false); }}>Visão geral</button><button className={view === "leads" ? "active" : ""} onClick={() => { setView("leads"); setMobileMenuOpen(false); }}>Leads</button><button className={view === "kanban" ? "active" : ""} onClick={() => { setView("kanban"); setMobileMenuOpen(false); }}>Funil</button><button className={view === "tasks" ? "active" : ""} onClick={() => { setView("tasks"); setMobileMenuOpen(false); }}>Tarefas</button><button className={view === "activities" ? "active" : ""} onClick={() => { setView("activities"); setMobileMenuOpen(false); }}>Atividades</button><button className={view === "whatsapp" ? "active" : ""} onClick={() => { setView("whatsapp"); setMobileMenuOpen(false); }}>WhatsApp</button></nav><div className="side-footer"><span>{role}</span>{installPrompt && !isStandalone && <button className="text-button install-pwa" onClick={() => void installPwa()}>Instalar CRM</button>}<button className="text-button" onClick={signOut}>Sair</button></div></aside>{mobileMenuOpen && <button className="mobile-menu-backdrop" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}<section className={"content "+(view === "whatsapp" ? "whatsapp-page" : "")}><header className={view === "whatsapp" ? "whatsapp-outer-header" : ""}><button className="mobile-menu-button" aria-label="Abrir menu" onClick={() => setMobileMenuOpen(true)}><span /><span /><span /></button><div><p className="eyebrow">OPERAÇÃO COMERCIAL</p><h1>{view === "overview" ? "Visão geral" : view === "leads" ? "Leads" : view === "kanban" ? "Funil comercial" : view === "tasks" ? "Próximas ações" : view === "activities" ? "Atividades" : "WhatsApp"}</h1><p className="muted">{view === "overview" ? "Acompanhe leads, prioridades e próximos passos." : view === "leads" ? "Diagnósticos e conversas qualificadas em um só lugar." : view === "kanban" ? "Movimente oportunidades pelas etapas do processo comercial." : view === "tasks" ? "Organize os retornos comerciais que precisam de atenção." : view === "activities" ? "Histórico recente da operação comercial." : "Conversas recebidas pelo WhatsApp da Wuniflow."}</p></div><button onClick={() => { setNewLeadConversationId(null); setIsNewLeadOpen(true); }}>+ Novo lead</button></header>{view === "overview" ? <><section className="stats"><article><span>Leads abertos</span><strong>{stats.open}</strong></article><article><span>Próximas ações</span><strong>{stats.next}</strong></article><article><span>Prioridade alta</span><strong>{stats.urgent}</strong></article><article><span>Ganhos</span><strong>{stats.won}</strong></article></section><section className="panel"><div className="panel-title"><div><h2>Leads recentes</h2><p>Diagnósticos recebidos e atendimentos em andamento.</p></div><span>{leads.length} registros</span></div>{leads.length === 0 ? <div className="empty"><h3>Ainda não há leads no CRM</h3><p>O próximo diagnóstico confirmado pela landing aparecerá aqui automaticamente.</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Próxima ação</th><th></th></tr></thead><tbody>{leadRows}</tbody></table></div>}</section></> : view === "leads" ? <section className="panel"><div className="panel-title lead-list-heading"><div><h2>Todos os leads</h2><p>Use a busca para localizar empresa, contato, etapa ou telefone.</p></div><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar lead…" /></div>{filteredLeads.length === 0 ? <div className="empty"><h3>Nenhum lead encontrado</h3><p>{leads.length ? "Tente outro termo de busca." : "Os novos diagnósticos serão listados aqui."}</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Prioridade</th><th>Última atualização</th><th></th></tr></thead><tbody>{leadRows}</tbody></table></div>}</section> : view === "kanban" ? <section className="kanban-section"><div className="kanban-toolbar"><div><h2>Pipeline comercial</h2><p>Arraste os cards entre as etapas. No celular, use o seletor do card.</p></div><div className="kanban-toolbar-actions"><span>{filteredLeads.length} oportunidades</span><input className="search-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar no funil…" /></div></div>{leadActionMessage && <p className="kanban-feedback">{leadActionMessage}</p>}<div className="kanban-board">{kanbanColumns.map(({ stage, leads: stageLeads }) => <section key={stage.id} className={"kanban-column "+(stage.stage_type !== "open" ? "terminal" : "")} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => handleKanbanDrop(event, stage.id)}><header><div><i style={{ background: stage.color || "#94a3b8" }} /><strong>{stage.name}</strong></div><b>{stageLeads.length}</b></header><div className="kanban-cards">{stageLeads.length ? stageLeads.map((lead) => <article key={lead.id} className={"kanban-card "+(draggedLeadId === lead.id ? "dragging" : "")+(movingLeadId === lead.id ? " moving" : "")} draggable={movingLeadId !== lead.id} onDragStart={(event) => handleKanbanDragStart(event, lead.id)} onDragEnd={() => setDraggedLeadId(null)}><button type="button" className="kanban-card-main" onClick={() => void openLead(lead)}><span className="kanban-card-top"><strong>{lead.name}</strong><em className={"priority "+lead.priority}>{lead.priority}</em></span><small>{lead.company_name || lead.source || "Sem empresa informada"}</small><span className="kanban-next"><b>{lead.next_action_title || "Definir próxima ação"}</b><small>{formatDate(lead.next_action_at || lead.last_contact_at)}</small></span></button><div className="kanban-card-foot"><span>{lead.whatsapp || "Sem WhatsApp"}</span><label><span>Mover</span><select value={lead.stage_id} disabled={movingLeadId === lead.id} onChange={(event) => void moveLeadStage(lead.id, event.target.value)}>{stages.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label></div></article>) : <div className="kanban-empty">Solte um lead aqui</div>}</div></section>)}</div></section> : view === "tasks" ? <section className="panel"><div className="panel-title"><div><h2>Próximas ações</h2><p>Leads com retorno ou acompanhamento agendado.</p></div><span>{taskLeads.length} pendências</span></div>{taskLeads.length === 0 ? <div className="empty"><h3>Nenhuma ação pendente</h3><p>Defina a próxima ação dentro de um lead para ela aparecer aqui.</p></div> : <div className="table-wrap"><table><thead><tr><th>Lead</th><th>Etapa</th><th>Próxima ação</th><th>Quando</th><th></th></tr></thead><tbody>{taskLeads.map((lead) => <tr key={lead.id}><td><strong>{lead.name}</strong><small>{lead.company_name || "Empresa não informada"}</small></td><td><span className="stage"><i style={{ background: lead.pipeline_stages?.color || "#94a3b8" }} />{lead.pipeline_stages?.name || "Sem etapa"}</span></td><td><strong>{lead.next_action_title || "Revisar contexto e definir próximo passo"}</strong></td><td>{formatDate(lead.next_action_at)}</td><td className="actions"><button className="view-button" onClick={() => void openLead(lead)}>Abrir lead</button></td></tr>)}</tbody></table></div>}</section> : view === "activities" ? <section className="panel"><div className="panel-title"><div><h2>Atividades recentes</h2><p>Notas, handoffs e interações registradas no CRM.</p></div><span>{recentActivities.length} registros</span></div>{recentActivities.length === 0 ? <div className="empty"><h3>Ainda não há atividades</h3><p>As próximas notas e movimentações aparecerão aqui.</p></div> : <div className="activity-feed">{recentActivities.map((activity) => <article key={activity.id}><span>{activityLabel[activity.activity_type]}</span><div><strong>{activity.title}</strong><p>{activity.leads?.name || "Lead não localizado"}{activity.leads?.company_name ? " · " + activity.leads.company_name : ""}</p>{activity.description && <p>{activity.description}</p>}<small>{formatDate(activity.occurred_at)}</small></div><button className="view-button" onClick={() => { const lead = leads.find((item) => item.id === activity.lead_id); if (lead) void openLead(lead); }}>Abrir lead</button></article>)}</div>}</section> : organizationId ? <WhatsAppInbox
   organizationId={organizationId}
+  initialConversationId={initialWhatsAppConversationId}
+  onConversationDeepLinkHandled={()=>setInitialWhatsAppConversationId(null)}
   onOpenMenu={()=>setMobileMenuOpen(true)}
   onOpenLead={(leadId)=>{const lead=leads.find((item)=>item.id===leadId);if(lead)void openLead(lead)}}
   onCreateLead={({name,phone,conversationId})=>{
