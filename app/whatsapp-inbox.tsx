@@ -34,7 +34,7 @@ type QuickReply = {
 };
 
 type InboxToast = {
-  conversationId: string;
+  conversationId: string | null;
   title: string;
   preview: string;
 };
@@ -195,6 +195,15 @@ const documentLabel = (mime: string | null) => {
   return "DOC";
 };
 
+const WEB_PUSH_VAPID_PUBLIC_KEY = "BGy9OhMGvMYkszyUfDUaxMNk6lFqbRZ0MGTNPFvdn0Teq5wVBstG9ZM5wt2p2tfjzqVDpcSmViauY5ihIXGosk4";
+
+const urlBase64ToUint8Array = (value: string) => {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+};
+
 const commonEmojis = [
   "😀","😃","😄","😁","😂","🤣","😊","😍",
   "🥰","😘","😎","🤩","🥳","😅","😉","🤔",
@@ -235,11 +244,15 @@ function Avatar({ name, url, size = "normal" }: { name: string; url: string | nu
 
 export default function WhatsAppInbox({
   organizationId,
+  initialConversationId,
+  onConversationDeepLinkHandled,
   onOpenMenu,
   onOpenLead,
   onCreateLead,
 }: {
   organizationId: string;
+  initialConversationId?: string | null;
+  onConversationDeepLinkHandled?: () => void;
   onOpenMenu?: () => void;
   onOpenLead?: (leadId: string) => void;
   onCreateLead?: (contact: { name: string; phone: string; conversationId: string }) => void;
@@ -303,6 +316,7 @@ export default function WhatsAppInbox({
   const [messageSearch, setMessageSearch] = useState("");
   const [messageSearchIndex, setMessageSearchIndex] = useState(0);
   const [notificationEnabled, setNotificationEnabled] = useState(false);
+  const [notificationBusy, setNotificationBusy] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<"default" | "granted" | "denied" | "unsupported">("default");
   const [inboxToast, setInboxToast] = useState<InboxToast | null>(null);
   const [metricsOpen, setMetricsOpen] = useState(false);
@@ -573,15 +587,56 @@ export default function WhatsAppInbox({
   }, [selectedId]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
+    if (
+      typeof window === "undefined" ||
+      !("Notification" in window) ||
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window)
+    ) {
       setNotificationPermission("unsupported");
+      setNotificationEnabled(false);
       return;
     }
 
     const permission = Notification.permission as "default" | "granted" | "denied";
     setNotificationPermission(permission);
-    setNotificationEnabled(permission === "granted" && window.localStorage.getItem("wuniflow-wa-notifications") === "enabled");
-  }, []);
+
+    void (async () => {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager.getSubscription();
+        setNotificationEnabled(permission === "granted" && Boolean(subscription));
+
+        if (permission === "granted" && subscription && currentUserId && supabase) {
+          const serialized = subscription.toJSON();
+          if (serialized.keys?.p256dh && serialized.keys?.auth) {
+            await supabase.from("web_push_subscriptions").upsert({
+              organization_id: organizationId,
+              user_id: currentUserId,
+              endpoint: subscription.endpoint,
+              p256dh: serialized.keys.p256dh,
+              auth: serialized.keys.auth,
+              user_agent: navigator.userAgent.slice(0, 500),
+              device_name: /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? "Celular / tablet" : "Computador",
+              is_active: true,
+              failure_count: 0,
+              last_error: null,
+              last_seen_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }, { onConflict: "endpoint" });
+          }
+        }
+      } catch {
+        setNotificationEnabled(false);
+      }
+    })();
+  }, [organizationId, currentUserId]);
+
+  useEffect(() => {
+    if (!initialConversationId || !conversations.some((conversation) => conversation.id === initialConversationId)) return;
+    setSelectedId(initialConversationId);
+    onConversationDeepLinkHandled?.();
+  }, [initialConversationId, conversations, onConversationDeepLinkHandled]);
 
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 60000);
@@ -664,28 +719,7 @@ export default function WhatsAppInbox({
       toastTimerRef.current = setTimeout(() => setInboxToast(null), 6500);
     }
 
-    if (
-      notificationEnabled &&
-      typeof window !== "undefined" &&
-      "Notification" in window &&
-      Notification.permission === "granted" &&
-      (document.hidden || message.conversation_id !== selectedIdRef.current)
-    ) {
-      try {
-        const notification = new Notification(title, {
-          body: preview,
-          tag: "wuniflow-wa-" + message.conversation_id,
-        });
-        notification.onclick = () => {
-          window.focus();
-          setSelectedId(message.conversation_id);
-          notification.close();
-        };
-      } catch {
-        // In-app toast remains available when native browser notifications are unsupported.
-      }
-    }
-  }, [notificationEnabled]);
+  }, []);
 
   useEffect(() => {
     if (!selectedId) {
@@ -783,25 +817,100 @@ export default function WhatsAppInbox({
   }, [organizationId, selectedId, loadConversations, loadMessages, loadNotes, showInboundNotification]);
 
   const toggleNotifications = async () => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
+    if (
+      !supabase ||
+      !currentUserId ||
+      typeof window === "undefined" ||
+      !("Notification" in window) ||
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window)
+    ) {
       setNotificationPermission("unsupported");
       return;
     }
 
-    if (Notification.permission !== "granted") {
-      const permission = await Notification.requestPermission();
-      setNotificationPermission(permission);
-      if (permission !== "granted") {
+    if (notificationBusy) return;
+    setNotificationBusy(true);
+
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      let subscription = await registration.pushManager.getSubscription();
+
+      if (notificationEnabled) {
+        if (subscription) {
+          await supabase
+            .from("web_push_subscriptions")
+            .delete()
+            .eq("user_id", currentUserId)
+            .eq("endpoint", subscription.endpoint);
+          await subscription.unsubscribe();
+        }
         setNotificationEnabled(false);
-        window.localStorage.removeItem("wuniflow-wa-notifications");
         return;
       }
-    }
 
-    const next = !notificationEnabled;
-    setNotificationEnabled(next);
-    if (next) window.localStorage.setItem("wuniflow-wa-notifications", "enabled");
-    else window.localStorage.removeItem("wuniflow-wa-notifications");
+      let permission = Notification.permission as "default" | "granted" | "denied";
+      if (permission !== "granted") {
+        permission = await Notification.requestPermission() as "default" | "granted" | "denied";
+        setNotificationPermission(permission);
+      }
+
+      if (permission !== "granted") {
+        setNotificationEnabled(false);
+        return;
+      }
+
+      subscription = subscription || await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(WEB_PUSH_VAPID_PUBLIC_KEY),
+      });
+
+      const serialized = subscription.toJSON();
+      if (!serialized.keys?.p256dh || !serialized.keys?.auth) {
+        throw new Error("push_keys_missing");
+      }
+
+      const { error } = await supabase.from("web_push_subscriptions").upsert({
+        organization_id: organizationId,
+        user_id: currentUserId,
+        endpoint: subscription.endpoint,
+        p256dh: serialized.keys.p256dh,
+        auth: serialized.keys.auth,
+        user_agent: navigator.userAgent.slice(0, 500),
+        device_name: /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? "Celular / tablet" : "Computador",
+        is_active: true,
+        failure_count: 0,
+        last_error: null,
+        last_seen_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "endpoint" });
+
+      if (error) {
+        await subscription.unsubscribe().catch(() => false);
+        throw error;
+      }
+
+      setNotificationPermission("granted");
+      setNotificationEnabled(true);
+      setInboxToast({
+        conversationId: null,
+        title: "Web Push ativado",
+        preview: "Você receberá novas mensagens mesmo com o CRM fechado.",
+      });
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setInboxToast(null), 5000);
+    } catch {
+      setNotificationEnabled(false);
+      setInboxToast({
+        conversationId: null,
+        title: "Não foi possível ativar o Web Push",
+        preview: "No iPhone/iPad, instale o Wuniflow CRM na Tela de Início antes de ativar as notificações.",
+      });
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setInboxToast(null), 7000);
+    } finally {
+      setNotificationBusy(false);
+    }
   };
 
   const finishRecordingResources = () => {
@@ -1641,7 +1750,7 @@ export default function WhatsAppInbox({
           type="button"
           className="wa-inbox-toast"
           onClick={() => {
-            setSelectedId(inboxToast.conversationId);
+            if (inboxToast.conversationId) setSelectedId(inboxToast.conversationId);
             setInboxToast(null);
           }}
         >
@@ -1705,12 +1814,12 @@ export default function WhatsAppInbox({
                 notificationPermission === "unsupported"
                   ? "Notificações não suportadas neste navegador"
                   : notificationEnabled
-                    ? "Desativar notificações"
-                    : "Ativar notificações"
+                    ? "Desativar Web Push neste dispositivo"
+                    : "Ativar Web Push neste dispositivo"
               }
-              disabled={notificationPermission === "unsupported"}
+              disabled={notificationPermission === "unsupported" || notificationBusy}
             >
-              {notificationEnabled ? "🔔" : "🔕"}
+              {notificationBusy ? "…" : notificationEnabled ? "🔔" : "🔕"}
             </button>
             {canManageSla && (
               <button type="button" className="wa-sla-settings-button" onClick={() => setSlaSettingsOpen(true)}>SLA</button>
