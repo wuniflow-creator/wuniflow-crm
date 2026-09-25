@@ -81,6 +81,7 @@ Deno.serve(async (req: Request) => {
     .eq("organization_id", conversation.organization_id)
     .eq("conversation_id", conversation.id)
     .eq("direction", "inbound")
+    .is("read_at", null)
     .not("provider_message_id", "is", null)
     .order("created_at", { ascending: false })
     .limit(100);
@@ -127,7 +128,23 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    return respond({ ok: true, crm_read: true, provider_synced: true, marked: readMessages.length });
+    const now = new Date().toISOString();
+    const providerIds = readMessages.map((message) => message.id);
+    const { error: messageReadError } = await supabase
+      .from("whatsapp_messages")
+      .update({ status: "read", read_at: now })
+      .eq("organization_id", conversation.organization_id)
+      .eq("conversation_id", conversation.id)
+      .eq("direction", "inbound")
+      .in("provider_message_id", providerIds);
+
+    return respond({
+      ok: true,
+      crm_read: true,
+      provider_synced: true,
+      marked: readMessages.length,
+      message_state_updated: !messageReadError,
+    });
   } catch (error) {
     return respond({
       ok: true,
