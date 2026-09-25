@@ -1926,3 +1926,190 @@
     font-size:7px;
   }
 }
+
+
+/* WhatsApp SLA + operational priority */
+.wa-list-head-actions{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.wa-sla-settings-button{
+  min-height:32px;
+  padding:6px 9px;
+  border:1px solid #394049;
+  border-radius:9px;
+  background:#22272d;
+  color:#aeb5bd;
+  box-shadow:none;
+  font-size:8px;
+  font-weight:800;
+}
+.wa-sla-settings-button:hover{
+  background:#2a3037;
+  filter:none;
+}
+.wa-filters button b{
+  min-width:16px;
+  height:16px;
+  display:inline-grid;
+  place-items:center;
+  margin-left:4px;
+  padding:0 4px;
+  border-radius:999px;
+  background:#7d3240;
+  color:#fff;
+  font-size:6px;
+}
+.wa-operational-line{
+  display:flex;
+  align-items:center;
+  gap:4px;
+  margin-top:4px;
+  overflow-x:auto;
+  scrollbar-width:none;
+}
+.wa-operational-line::-webkit-scrollbar{display:none}
+.wa-priority-pill,
+.wa-sla-pill{
+  flex:0 0 auto;
+  display:inline-flex;
+  align-items:center;
+  min-height:18px;
+  padding:1px 6px;
+  border:1px solid #3b4149;
+  border-radius:999px;
+  font-size:6px;
+  font-weight:800;
+  line-height:1.2;
+}
+.wa-priority-pill.low{
+  border-color:#49545e;
+  color:#aeb9c3;
+  background:#20262b;
+}
+.wa-priority-pill.normal{
+  border-color:#536273;
+  color:#c4d3e1;
+  background:#202833;
+}
+.wa-priority-pill.high{
+  border-color:#836b38;
+  color:#efd58f;
+  background:#31291d;
+}
+.wa-priority-pill.urgent{
+  border-color:#843e4b;
+  color:#ffb8c3;
+  background:#351f24;
+}
+.wa-sla-pill.running{
+  border-color:#4b5f6f;
+  color:#afc6d8;
+  background:#1d2830;
+}
+.wa-sla-pill.overdue{
+  border-color:#8a3d4b;
+  color:#ffc0c9;
+  background:#351f25;
+}
+.wa-priority-bar{
+  min-height:48px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:7px 12px;
+  border-bottom:1px solid #282c32;
+  background:#15191e;
+}
+.wa-priority-bar>div{
+  display:flex;
+  align-items:center;
+  gap:7px;
+}
+.wa-priority-bar>div>span{
+  color:#858c95;
+  font-size:8px;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+}
+.wa-priority-bar select{
+  height:31px;
+  padding:0 28px 0 8px;
+  border:1px solid #343941;
+  border-radius:8px;
+  background:#23272d;
+  color:#dce0e4;
+  font-size:8px;
+}
+.wa-priority-bar>strong{
+  display:flex;
+  align-items:flex-end;
+  flex-direction:column;
+  gap:2px;
+  color:#b7c9d6;
+  font-size:8px;
+  font-weight:800;
+}
+.wa-priority-bar>strong.overdue{color:#ff9eac}
+.wa-priority-bar>strong.idle{
+  color:#767e88;
+  font-weight:650;
+}
+.wa-priority-bar>strong small{
+  color:#747d87;
+  font-size:7px;
+  font-weight:500;
+}
+.wa-sla-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+}
+.wa-sla-grid label{
+  position:relative;
+}
+.wa-sla-grid label small{
+  position:absolute;
+  right:9px;
+  bottom:12px;
+  color:#727b85;
+  font-size:7px;
+  pointer-events:none;
+}
+.wa-sla-grid input{
+  padding-right:48px!important;
+}
+.wa-sla-hint{
+  margin:0!important;
+  color:#818a94!important;
+  font-size:8px!important;
+  line-height:1.45;
+}
+@media(max-width:900px){
+  .wa-list-head-actions{
+    gap:5px;
+  }
+  .wa-sla-settings-button{
+    display:none;
+  }
+  .wa-priority-bar{
+    min-height:43px;
+    padding:5px 8px;
+  }
+  .wa-priority-bar>div>span{display:none}
+  .wa-priority-bar select{
+    height:29px;
+    font-size:7px;
+  }
+  .wa-priority-bar>strong{
+    font-size:7px;
+  }
+  .wa-priority-bar>strong small{
+    font-size:6px;
+  }
+  .wa-sla-grid{
+    grid-template-columns:1fr;
+  }
+}
