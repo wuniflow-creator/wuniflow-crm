@@ -22,10 +22,13 @@ function adminClient() {
 
 Deno.serve(async (req: Request) => {
   if (req.method === "GET") {
+    const supabase = adminClient();
+    const { data: vapidPrivate, error: vapidError } = await supabase.rpc("get_web_push_vapid_private");
     return json({
       ok: true,
       service: "web-push-dispatch",
       vapid_public_key: VAPID_PUBLIC_KEY,
+      vapid_configured: !vapidError && Boolean(vapidPrivate),
     });
   }
 
