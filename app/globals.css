@@ -2662,3 +2662,213 @@
     width:auto;
   }
 }
+
+
+/* WhatsApp inbox metrics */
+.wa-metrics-button{
+  min-height:32px;
+  padding:6px 9px;
+  border:1px solid #394049;
+  border-radius:9px;
+  background:#22272d;
+  color:#b7bec6;
+  box-shadow:none;
+  font-size:8px;
+  font-weight:800;
+}
+.wa-metrics-button:hover{background:#2b3138;filter:none}
+.wa-mobile-metrics{
+  display:none;
+  width:38px;
+  height:38px;
+  place-items:center;
+  padding:0;
+  border:1px solid #3a3f46;
+  border-radius:50%;
+  background:#23272d;
+  color:#dce0e4;
+  box-shadow:none;
+  font-size:15px;
+}
+.wa-metrics-modal{
+  width:min(760px,100%);
+}
+.wa-metrics-toolbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:12px 16px 0;
+}
+.wa-metrics-toolbar>div{
+  display:flex;
+  gap:5px;
+}
+.wa-metrics-toolbar button{
+  min-height:31px;
+  padding:5px 9px;
+  border:1px solid #343a42;
+  border-radius:8px;
+  background:#22272d;
+  color:#9fa7b0;
+  box-shadow:none;
+  font-size:8px;
+  font-weight:750;
+}
+.wa-metrics-toolbar button.active{
+  border-color:#76507d;
+  background:#35263a;
+  color:#eadcf0;
+}
+.wa-metrics-toolbar button:hover{background:#2b3037;filter:none}
+.wa-metrics-content{
+  display:grid;
+  gap:12px;
+  padding:12px 16px 16px;
+}
+.wa-metrics-cards{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;
+}
+.wa-metrics-cards article{
+  min-width:0;
+  padding:12px;
+  border:1px solid #31373e;
+  border-radius:11px;
+  background:#1d2227;
+}
+.wa-metrics-cards span,
+.wa-metrics-cards small{
+  display:block;
+  color:#858e98;
+  font-size:7px;
+}
+.wa-metrics-cards strong{
+  display:block;
+  margin:5px 0 4px;
+  color:#edf0f2;
+  font-size:19px;
+  line-height:1;
+}
+.wa-metrics-queue{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:6px;
+}
+.wa-metrics-queue article{
+  display:grid;
+  place-items:center;
+  align-content:center;
+  min-height:58px;
+  padding:7px 5px;
+  border:1px solid #2f353c;
+  border-radius:9px;
+  background:#191e23;
+}
+.wa-metrics-queue article strong{
+  color:#e8ebee;
+  font-size:14px;
+}
+.wa-metrics-queue article span{
+  margin-top:3px;
+  color:#8e969f;
+  text-align:center;
+  font-size:7px;
+}
+.wa-metrics-queue article.alert{
+  border-color:#743845;
+  background:#2c1c21;
+}
+.wa-metrics-queue article.alert strong,
+.wa-metrics-queue article.alert span{color:#f2a5af}
+.wa-metrics-volume{
+  padding:12px;
+  border:1px solid #30363d;
+  border-radius:11px;
+  background:#181d22;
+}
+.wa-metrics-volume>header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:10px;
+}
+.wa-metrics-volume>header strong{
+  display:block;
+  color:#e8ebee;
+  font-size:10px;
+}
+.wa-metrics-volume>header small,
+.wa-metrics-volume>header>span{
+  display:block;
+  margin-top:3px;
+  color:#818a94;
+  font-size:7px;
+}
+.wa-metrics-volume>div{
+  display:grid;
+  gap:5px;
+}
+.wa-metrics-volume article{
+  display:grid;
+  grid-template-columns:42px 1fr 46px;
+  align-items:center;
+  gap:8px;
+}
+.wa-metrics-volume time,
+.wa-metrics-volume article small{
+  color:#808994;
+  font-size:7px;
+}
+.wa-metrics-volume article small{text-align:right}
+.wa-metric-bars{
+  display:grid;
+  gap:2px;
+  min-width:0;
+}
+.wa-metric-bars i{
+  display:block;
+  min-width:2px;
+  height:4px;
+  border-radius:999px;
+}
+.wa-metric-bars i.inbound{background:#76507d}
+.wa-metric-bars i.outbound{background:#496d5a}
+.wa-metrics-volume>footer{
+  display:flex;
+  justify-content:flex-end;
+  margin-top:8px;
+}
+.wa-metrics-volume>footer span{
+  color:#6f7882;
+  font-size:6px;
+}
+.wa-metrics-loading,
+.wa-metrics-error{
+  padding:30px 16px 36px;
+  color:#8f98a1;
+  text-align:center;
+  font-size:9px;
+}
+.wa-metrics-error{color:#f09aa6}
+@media(max-width:900px){
+  .wa-mobile-metrics{display:grid}
+  .wa-metrics-button{display:none}
+  .wa-metrics-modal{
+    max-height:90dvh;
+  }
+  .wa-metrics-toolbar{
+    padding:10px 12px 0;
+  }
+  .wa-metrics-content{
+    padding:10px 12px 14px;
+  }
+  .wa-metrics-cards{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .wa-metrics-queue{
+    grid-template-columns:repeat(3,minmax(0,1fr));
+  }
+}
